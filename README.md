@@ -54,25 +54,23 @@
 
 ### 为什么要打补丁
 
-对话页的时间线是**桌宠世界自己**推的流：只有它能写 `source: 'desktop-pet'` 的事件。原版框架里：
+对话页的时间线是**桌宠世界自己**推的流：只有它能写 `source: 'desktop-pet'` 的事件。0.1.22 及更早的框架里：
 
 - `node_modules/cortico-world-desktop-pet/src/chat.ts` 的 `chatItem()` 在 `kind: 'say'` 分支只取
   `meta.beats`，把事件上的 `blobs` 丢掉；
 - 浏览器侧 bundle 里 say 那一段只画 `pet-bubble`/`mood`，没有图片槽位（只有用户侧消息有）。
 
 所以「另写一个扩展往对话页推图」是走不通的（别的世界推的事件不会经过桌宠的
-`chat.broadcast`，`chatPage()` 也只读 `source === 'desktop-pet'`）。两条补上就行。补丁一共 12 处：
-前 10 处是你这份安装里本来就有的文件（最后 3 处让 `pet_show_image` 也认相对路径），后 2 处
-（`optional`）落在**第三方 QQ 扩展**上，没装那个扩展就记 `absent`——不算失败、也不进状态页的总数：
+`chat.broadcast`，`chatPage()` 也只读 `source === 'desktop-pet'`）。0.1.23 之前靠补丁把这两段补上；
+**0.1.23 框架自己已经内置，那 4 处补丁已经删掉**（见下一节）。现在补丁一共 8 处：
+前 6 处是你这份安装里本来就有的文件（`world.ts` 5 处 + `definition.ts` 1 处，最后 3 处让
+`pet_show_image` 也认相对路径），后 2 处（`optional`）落在**第三方 QQ 扩展**上，没装那个扩展就记
+`absent`——不算失败、也不进状态页的总数：
 
 | 补丁 id | 文件 | 做什么 |
 | --- | --- | --- |
-| `client-say-images` | `build/cortico/dist/web/main-*.js` | say 那一行之后，有 `images` 就画 `chat-thumb` |
-| `pet-say-images` | 桌宠 `src/chat.ts` | say 分支把事件里的图片附件映射成 `images` |
-| `pet-say-type` | 桌宠 `src/chat.ts` | `ChatItem` 的 say 变体加 `images?: WireImage[]` |
 | `pet-fs-import` | 桌宠 `src/world.ts` | `node:fs` 导入加 `readFileSync`（`{ statSync }` 与 `{ existsSync, statSync }` 两种写法都认） |
 | `pet-path-import` | 桌宠 `src/world.ts` | `node:path` 导入加 `basename/extname/isAbsolute` |
-| `pet-record-blobs` | 桌宠 `src/world.ts` | `record()` 多一个 `blobs?` 参数，写进事件 |
 | `pet-show-image-tool` | 桌宠 `src/world.ts` | `CHAT_IMAGE_TOOL` 常量、`sniffImageMime()`、`showImage()`、挂进 `tools()` |
 | `pet-workspace-option` | 桌宠 `src/world.ts` | 世界选项加 `workspaceDir?: () => string`（装配层注入桌宠工作区） |
 | `pet-workspace-relpaths` | 桌宠 `src/world.ts` | `pet_show_image` 的相对路径按 `workspaceDir()` 拼，说明也改成「绝对路径或相对工作区」 |
@@ -80,14 +78,30 @@
 | `qq-image-relpaths`（可选） | `<安装>\data\extensions\node_modules\cortico-world-qq-better-alont1\src\world.ts` | `qq_send_image` / `qq_view_image` 认「相对桌宠工作区」的路径（见下） |
 | `qq-image-hints`（可选） | 同上 | 那两个工具的参数说明也改成「相对桌宠工作区的路径，如 `blobs/xx.jpg`」 |
 
-改法一律是**精确锚点 + 幂等标记**（`coopanion-chat-image` / `/*COOPANION_CHAT_IMAGE*/`）：
+改法一律是**精确锚点 + 幂等标记**（`coopanion-chat-image`）：
 认不出锚点就记一条失败并**不动那个文件**，绝不硬猜。第一次改写前会把原文留一份
 `<文件>.coopanion-orig`。
 
-补丁器不写死压缩后的变量名：客户端那处的 blob URL 助手（0.1.19 叫 `oD`、0.1.21 叫 `p4`）和
-UI 构造器（`e.h` / `t.h`）都从 bundle 里按形状认出来；`tools()` 那处也不写死
+补丁器不写死源码里的变量名：`tools()` 那处不写死
 `DESKTOP_PET_TOOL_DECLS.map(...)`，而是包住 `tools()` 里现有的 `return ...;`。
-所以升级换了一轮压缩变量名之后照样能打上（0.1.21 实测：原先 2 处失配已修好）。
+所以升级换了写法之后照样能打上。
+
+### 框架 0.1.23 之后为什么少了 4 处补丁
+
+0.1.23 起「把图发到对话页」是框架原生能力，不再是这个扩展要补的洞：
+
+- 桌宠 `pet_say` 工具原生就有 `images` 参数（给 `[blob …]` 句柄），`world.ts` 的
+  `record(meta, text, blobs = [])` 原生把图片附件写进事件；
+- `chat.ts` 原生有 `wireImages()`：把事件 `blobs` 里 `image/*` 的映射成 `WireImage`，`ChatItem` 的
+  say 变体本身带 `images?: WireImage[]`；
+- 客户端 bundle 的 say 一段原生就画 `chat-thumb` 缩略图并挂 lightbox。
+
+原先为此打的 4 处——`client-say-images`（改客户端 bundle）、`pet-say-images`、`pet-say-type`
+（都改 `chat.ts`）、`pet-record-blobs`（改 `world.ts` 的 `record()`）——已经删掉。留着不只是多余：
+0.1.23 的 bundle 与新 `chat.ts` 已经换了写法，那几条锚点认不出来，每次启动都会白记三条失败。
+
+**但 `pet_show_image` 仍然保留**：原生的 `pet_say.images` 只认 `[blob …]` 句柄，不认文件路径，而
+`pet_show_image` 正是唯一「按路径贴图」的入口——它的实现与「相对桌宠工作区」那几处补丁照样必需。
 
 ### 为什么顺手改了 QQ 扩展（`optional` 那两处）
 
@@ -127,7 +141,7 @@ UI 构造器（`e.h` / `t.h`）都从 bundle 里按形状认出来；`tools()` �
 
 1. 启动时打一遍补丁 → 如果这次真的改了文件，状态文件里记 `requested: true`，并在 4 秒后
    `POST http://127.0.0.1:<web.port>/api/run/restart` 请控制台重启一次（桌宠侧的 TS 源码要重启才装载）；
-2. 重启后再跑：文件已经是打过补丁的样子 → 12 处全部 `done`（没装 QQ 扩展的那 2 处是 `absent`）→ 不再请求重启（**不会反复重启**）；
+2. 重启后再跑：文件已经是打过补丁的样子 → 8 处全部 `done`（没装 QQ 扩展的那 2 处是 `absent`）→ 不再请求重启（**不会反复重启**）；
 3. 程序自动更新把文件覆写回原样 → 下一轮启动又补上，再重启一次，回到第 2 步；
 4. 万一「已经请求过重启，这次还是缺」——说明补丁根本落不到进程真正加载的那份文件上，
    这时记 `stuck`，**故意不再重启**（防死循环），并在「状态」页把 `id — 原因` 列出来给人看。
@@ -135,12 +149,12 @@ UI 构造器（`e.h` / `t.h`）都从 bundle 里按形状认出来；`tools()` �
 状态文件是扩展目录下的 `.chat-image-patch.json`（`{at, appRoot, patched, failed, requested}`）。
 想彻底关掉这套自愈（比如做回归测试），设环境变量 `COOPANION_CHAT_IMAGE_PATCH=0`。
 
-控制台「图片工坊 → 状态」页多出一张**发图补丁**卡片：装没装上、12 处在不在、上次检查时间、
+控制台「图片工坊 → 状态」页多出一张**发图补丁**卡片：装没装上、8 处在不在、上次检查时间、
 每一处的备份（`<文件>.coopanion-orig` 在不在、与当前文件是否一致）、上次还原记录、
 上次重启请求的结果，外加三个按钮：
 
 - **重打补丁**——立刻再对一遍（不改就不请求重启）；
-- **还原备份**——用更新下发的原文把四份文件覆盖回去（可逆，备份不删，随时能再打回来）；
+- **还原备份**——用更新下发的原文把改动过的文件覆盖回去（可逆，备份不删，随时能再打回来）；
 - **重启控制台**——等价于点菜单里的重启。
 
 ### 备份与还原
@@ -191,7 +205,6 @@ UI 构造器（`e.h` / `t.h`）都从 bundle 里按形状认出来；`tools()` �
 ```powershell
 node tools/patch.mjs                                              # 在临时副本上自测（不动安装）
 node tools/patch.mjs --app <安装目录>\resources\app --apply     # 真落盘
-node tools/patch.mjs --app <安装目录>\resources\app --verify    # 用安装里的 tsx 真跑 chatItem
 node tools/patch.mjs --app <安装目录>\resources\app --backups   # 看备份现状
 node tools/patch.mjs --app <安装目录>\resources\app --restore   # 按备份还原（可逆）
 node tools/patch.mjs --app <安装目录>\resources\app --restart   # 请控制台重启
@@ -230,7 +243,7 @@ pnpm add "D:\path\to\cortico-world-image" --ignore-workspace
 
 **装完必须重启 Coopanion**：扩展是 ESM 模块，进程内不会重新加载。重启后在
 `config.json` 的 `worlds.image.enabled` 上打开（控制台里也有这个开关），四个工具才会挂给桌宠。
-同一轮启动里，扩展还会把「对话页发图」那 12 处补丁检查一遍（其中 2 处是 QQ 扩展的可选补丁，没装就跳过），缺了就补、并自己请控制台重启一次
+同一轮启动里，扩展还会把「对话页发图」那 8 处补丁检查一遍（其中 2 处是 QQ 扩展的可选补丁，没装就跳过），缺了就补、并自己请控制台重启一次
 （详见上一节）。
 
 ### 一份能用的 `worlds.image` 长什么样
@@ -342,8 +355,8 @@ node tools/live.mjs                                       # 可加 LIVE_BASE_URL
 跑一次视端点而定，通常 20–60 秒（一张 1024×1024）。没有配好密钥的端点就别跑这一份。
 
 第四份管「对话页发图」那套补丁：默认在临时副本上自测（认锚点、幂等、留备份、还原、esbuild 语法、
-上游改过锚点时必须报失败、自动更新覆写后能补回来但不进重启死循环），另有 `--apply` / `--verify` /
-`--backups` / `--restore` / `--restart` 五种真动作，见上面「对话页发图」一节。
+上游改过锚点时必须报失败、自动更新覆写后能补回来但不进重启死循环），另有 `--apply` /
+`--backups` / `--restore` / `--restart` 四种真动作，见上面「对话页发图」一节。
 
 ```powershell
 node tools/patch.mjs
@@ -361,7 +374,7 @@ cortico-world-image/
 │  ├─ definition.js    # id/label/defaults/preflight/create
 │  ├─ config.js        # worlds.image 默认值、中英文案、配置组 schema
 │  ├─ world.js         # ImageWorld：工具、控制台面板、流式推送、生命周期
-│  ├─ chat-image-patch.js # 对话页发图的 12 处补丁（含 3 处工作区相对路径、2 处可选的 QQ 扩展）、状态文件、重启请求（自愈核心）
+│  ├─ chat-image-patch.js # 对话页发图的 8 处补丁（含 3 处工作区相对路径、2 处可选的 QQ 扩展）、状态文件、重启请求（自愈核心）
 │  ├─ api.js           # OpenAI 兼容客户端的取图/落盘/错误归一化
 │  ├─ gallery.js       # 作品仓库：目录 + index.json
 │  └─ png.js           # 零依赖 PNG 编码器 + 自检样图
@@ -370,7 +383,7 @@ cortico-world-image/
    ├─ check.mjs        # 离线检查（自带假 DOM）
    ├─ drymount.mts     # 用框架自带判据跑 dry-mount
    ├─ live.mjs         # 联网真画一张（自测整条链路）
-   └─ patch.mjs        # 对话页发图补丁：自测 / --apply / --verify / --backups / --restore / --restart
+   └─ patch.mjs        # 对话页发图补丁：自测 / --apply / --backups / --restore / --restart
 ```
 
 ## 已知限制

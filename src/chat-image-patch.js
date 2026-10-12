@@ -1,18 +1,22 @@
 /**
  * 「桌宠把图片发到「对话」页」这件事的运行时补丁。
  *
- * 为什么需要补丁：对话页（控制台的「对话」页）只读桌宠 World 的事件流。
- * 桌宠自己说的话走 `desktop-pet.self` 事件 + `meta.kind='say'`，而
- *   ① 桌宠包里 `chatItem()` 的 say 分支只看 `meta.beats[].text/mood`，把事件自带的
- *      `blobs`（也就是图片附件）丢掉了；`kind:'user'` 那支才是现成的写法。
- *   ② 客户端那半的 say 渲染只画 `pet-bubble` 文本，从不画 `chat-thumb`。
- * 两边各打一处补丁，图片才能从 `pet_show_image` 一路走到页面上的 `<img class="chat-thumb">`。
+ * 为什么还需要补丁：框架 0.1.23 起，「say 带图」这条链路本身已经是原生的——
+ * `chat.ts` 的 `chatItem()` 里 `wireImages()` 会把事件上的 `blobs` 里 `image/*` 映射成 `images`，
+ * `ChatItem` 的 say 变体带着 `images?: WireImage[]`，客户端 bundle 的 say 那段也会画
+ * `chat-thumb` 缩略图，`world.ts` 的 `record(meta, text, blobs = [])` 本来就能把附件写进事件。
+ * 所以原先针对客户端 bundle / `chat.ts` / `record()` 的那 4 处补丁**全部删掉了**。
+ *
+ * 留下来的补丁只做框架原生**没有**的那件事：`pet_say.images` 只认 `[blob …]` 句柄，
+ * 不认文件路径，所以「把本地一张图贴进对话页」仍然需要一个按路径收图的工具
+ * `pet_show_image`（挂在桌宠世界上，见 `pet-show-image-tool`），
+ * 以及它认「相对桌宠工作区」路径的那几处。
  *
  * 这些文件都在安装目录里，而程序会自动更新、把变动覆写掉，所以每次启动都由本模块
  * 重新检查一遍：认得出的原文就改写，已经打过的跳过，认不出来就记一条失败并在控制台
  * 状态页报出来 —— 绝不猜着改。（文件同时留一份 `.coopanion-orig` 备份，只存第一次的原文。）
  *
- * 补丁一律幂等：客户端那处靠 `/*COOPANION_CHAT_IMAGE*\/` 标记，桌宠那几处靠 detect 文本。
+ * 补丁一律幂等：靠 detect 文本（以及插进 `tools()` 那段的 `/*COOPANION_CHAT_IMAGE_TOOL*\/` 标记）。
  *
  * 还有一处跟「图片路径」有关的补丁落在 QQ 扩展（`cortico-world-qq-better-alont1`）上：
  * `qq_send_image` / `qq_view_image` 的本地路径过去一律按**扩展目录**解析，于是桌宠拿
@@ -22,12 +26,10 @@
  * 那是第三方包（pnpm 装在 `.pnpm/` 下、升级会换目录），所以同样走
  * 「认得出原文才改 + 留备份 + 可还原」，装不到就记 `absent`、不算失败。
  */
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const MARK = 'COOPANION_CHAT_IMAGE';
-const MARK_CLIENT = `/*${MARK}*/`;
 const PET_PKG = 'cortico-world-desktop-pet';
 const STATE_FILE = '.chat-image-patch.json';
 /** QQ 扩展（第三方包）：它的两个图片工具过去只认「相对扩展目录」。 */
@@ -81,19 +83,6 @@ export function resolveAppRoot(extra = []) {
 // ---------------------------------------------------------------------------
 // 补丁
 // ---------------------------------------------------------------------------
-
-/** 客户端入口 bundle：`main-<hash>.js` 里最大的那个。 */
-function clientEntry(webDir) {
-  if (!existsSync(webDir)) return null;
-  const files = readdirSync(webDir).filter((f) => /^main-.*\.js$/.test(f));
-  if (!files.length) return null;
-  let best = null;
-  for (const f of files) {
-    const size = statSync(join(webDir, f)).size;
-    if (!best || size > best.size) best = { file: join(webDir, f), size };
-  }
-  return best?.file ?? null;
-}
 
 /**
  * QQ 扩展的 `src/world.ts`。它在数据目录里：`<安装>/data/extensions/node_modules/<包>/src/world.ts`，
@@ -202,26 +191,6 @@ function patchToolsReturn(text) {
   return { text: text.slice(0, start) + next + text.slice(start + rm[0].length) };
 }
 
-const CHAT_ITEM_SAY_OLD = "  | { kind: 'say'; cursor: number; ts: string; beats: SayBeat[] }";
-const CHAT_ITEM_SAY_NEW = "  | { kind: 'say'; cursor: number; ts: string; beats: SayBeat[]; images?: WireImage[] }";
-
-const CHAT_SAY_OLD = [
-  "      if (m.kind === 'say' && Array.isArray(m.beats)) {",
-  "        const beats = (m.beats as Meta[]).flatMap((b) => (typeof b.text === 'string' && b.text ? [{ text: b.text, ...(b.mood && typeof b.mood === 'object' ? { mood: b.mood as Record<string, string> } : {}) }] : []));",
-  "        return beats.length ? { kind: 'say', ...base, beats } : null;",
-  "      }",
-].join('\n');
-
-const CHAT_SAY_NEW = [
-  "      if (m.kind === 'say' && Array.isArray(m.beats)) {",
-  "        const beats = (m.beats as Meta[]).flatMap((b) => (typeof b.text === 'string' && b.text ? [{ text: b.text, ...(b.mood && typeof b.mood === 'object' ? { mood: b.mood as Record<string, string> } : {}) }] : []));",
-  '        // coopanion-chat-image: 桌宠自己的话也能带图(图片随事件存成附件,页面向 chat.blob 要)',
-  '        const images = (e.blobs ?? []).filter((b) => b.mime.startsWith(\'image/\'))',
-  '          .map((b) => ({ ref: b.handle, mime: b.mime, ...(b.name ? { name: b.name } : {}) }));',
-  '        return beats.length || images.length ? { kind: \'say\', ...base, beats, ...(images.length ? { images } : {}) } : null;',
-  '      }',
-].join('\n');
-
 const WORLD_EXTRA = [
   '/** coopanion-chat-image: `pet_show_image` 认的图片后缀，文件头嗅探优先。 */',
   "const IMAGE_MIME_BY_EXT: Record<string, string> = {",
@@ -297,6 +266,9 @@ const SHOW_IMAGE_METHOD = [
  * 上面两段载荷（`WORLD_EXTRA` 的工具表 + `SHOW_IMAGE_METHOD` 的实现）**故意保持旧写法**，
  * 由下面这条补丁在原文里就地改写。这样「全新安装」和「早先打过旧版补丁的安装」走的是同一条路
  * （旧文本 → 新文本），不会出现两种终态。
+ *
+ * 注意：`SHOW_IMAGE_METHOD` 里是 `this.record(meta, text, blobs)` 三参调用 —— 框架 0.1.23 起
+ * `record()` 原生就收第三个 `blobs` 参数，所以这里不再需要 `pet-record-blobs` 那处签名补丁。
  */
 const PET_WORKSPACE_OPTION_ANCHOR = '  avatarFile?: string;';
 const PET_WORKSPACE_OPTION = [
@@ -364,106 +336,16 @@ const QQ_HINTS = [
   },
 ];
 
-/** 客户端 say 渲染：在循环外补一行图片缩略图。
- *
- *  客户端 bundle 是压缩过的，变量名每次构建都会变（0.1.19 叫 `oD`，0.1.21 叫 `p4`），
- *  所以这里不写死名字：一律从原文里认。认不出就报失败，绝不猜。
- */
-const CLIENT_SAY_RE = /if\(([A-Za-z_$][\w$]*)\.kind==="say"\)for\(let ([A-Za-z_$][\w$]*) of \1\.beats\)\{(.*?)\}else/s;
-const CLIENT_SAY_PATCHED_RE = new RegExp(
-  `if\\(([A-Za-z_$][\\w$]*)\\.kind==="say"\\)\\{for\\(let ([A-Za-z_$][\\w$]*) of \\1\\.beats\\)\\{(.*?)\\}${MARK_CLIENT.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`,
-  's',
-);
-
-/**
- * 对话页那个「把 `log:` 句柄变成图片 URL」的助手在 bundle 里的名字。
- * 原文形如 ``var p4=e=>`${Fb(a$,"chat","blob")}?args=${encodeURIComponent(JSON.stringify([e]))}` ``。
- */
-function clientBlobHelper(text) {
-  const at = text.indexOf(',"chat","blob")}?args=');
-  if (at < 0) return null;
-  const win = text.slice(Math.max(0, at - 200), at + 80);
-  const m = /([A-Za-z_$][\w$]*)=[A-Za-z_$][\w$]*=>`\$\{[A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*,"chat","blob"\)\}\?args=\$\{encodeURIComponent\(JSON\.stringify\(\[[A-Za-z_$][\w$]*\]\)\)\}`/.exec(win);
-  return m?.[1] ?? null;
-}
-
-/** 从 `from`（必须指向 `{`）起做花括号配对，返回配对 `}` 之后的下标；配不上返回 -1。 */
-function closeBrace(text, from) {
-  let depth = 0;
-  for (let i = from; i < text.length; i += 1) {
-    const c = text[i];
-    if (c === '{') depth += 1;
-    else if (c === '}') {
-      depth -= 1;
-      if (depth === 0) return i + 1;
-    }
-  }
-  return -1;
-}
-
-/** 要插进 say 分支的那一段。只用「ui kit 的 `.h`」和「图片 URL 助手」，不碰 document/全局变量。 */
-function clientBlock(ui, blob, item, container) {
-  return [
-    MARK_CLIENT,
-    `if(Array.isArray(${item}.images)&&${item}.images.length){`,
-    `let __coopanionRow=${ui}.h("div","sayrow");`,
-    `for(let __coopanionImg of ${item}.images){`,
-    `let __coopanionThumb=${ui}.h("img","chat-thumb");`,
-    `__coopanionThumb.src=${blob}(__coopanionImg.ref);`,
-    `__coopanionThumb.alt=__coopanionImg.name??"";`,
-    `__coopanionRow.append(__coopanionThumb);`,
-    '}',
-    `${container}.append(__coopanionRow);`,
-    '}',
-  ].join('');
-}
-
-/**
- * 打（或修）客户端那处补丁。返回 `{ text, changed }` 或 `{ error }`。
- * `changed === false` 表示原文已经是当前 bundle 对应的正确版本。
- */
-function patchClient(text) {
-  const blob = clientBlobHelper(text);
-  if (!blob) return { error: '没认出对话页取图片 URL 的助手（客户端 bundle 版本变了）' };
-  const fresh = CLIENT_SAY_RE.exec(text);
-  const m = fresh ?? CLIENT_SAY_PATCHED_RE.exec(text);
-  if (!m) return { error: '没找到 say 的渲染循环（客户端 bundle 版本变了）' };
-  const [whole, item, beat, body] = m;
-  const container = /([A-Za-z_$][\w$]*)\.append\([A-Za-z_$][\w$]*\)\s*$/.exec(body)?.[1];
-  if (!container) return { error: '没认出 say 循环挂在哪个容器上' };
-  const ui = /([A-Za-z_$][\w$]*)\.h\("div","sayrow"\)/.exec(body)?.[1];
-  if (!ui) return { error: '没认出对话页的 ui 工具（客户端 bundle 版本变了）' };
-  const block = clientBlock(ui, blob, item, container);
-  if (fresh) {
-    const next = `if(${item}.kind==="say"){for(let ${beat} of ${item}.beats){${body}}${block}}else`;
-    return { text: text.replace(whole, () => next), changed: true };
-  }
-  // 已经打过：把先前插进去的那段换成按当前变量名生成的版本（构建改名后自愈）。
-  const start = text.indexOf(MARK_CLIENT);
-  const open = text.indexOf('{', start);
-  const end = open < 0 ? -1 : closeBrace(text, open);
-  if (start < 0 || end < 0) return { error: '插进去的那段花括号没配平' };
-  const current = text.slice(start, end);
-  if (current === block) return { text, changed: false };
-  return { text: text.slice(0, start) + block + text.slice(end), changed: true };
-}
-
 /**
  * 每个补丁：`file` 是绝对路径，`done` 说这段原文是不是已经改过了，
  * `apply` 返回新文本或 `{ error }`。全部按顺序跑，互不依赖。
  */
 export function patchSpecs(appRoot) {
   const pet = join(appRoot, 'node_modules', PET_PKG, 'src');
-  const web = join(appRoot, 'build', 'cortico', 'dist', 'web');
-  const entry = clientEntry(web);
   const qq = qqWorldFile(appRoot);
   const specs = [
-    { id: 'client-say-images', file: entry, what: '对话页把 say 的图片画出来' },
-    { id: 'pet-say-images', file: join(pet, 'chat.ts'), what: '桌宠的话带上事件里的图片' },
-    { id: 'pet-say-type', file: join(pet, 'chat.ts'), what: 'SayBeat 事件的 ChatItem 类型加 images' },
     { id: 'pet-fs-import', file: join(pet, 'world.ts'), what: '桌宠包导入 readFileSync' },
     { id: 'pet-path-import', file: join(pet, 'world.ts'), what: '桌宠包导入 basename/extname/isAbsolute' },
-    { id: 'pet-record-blobs', file: join(pet, 'world.ts'), what: 'record() 能把图片附件写进事件' },
     { id: 'pet-show-image-tool', file: join(pet, 'world.ts'), what: 'pet_show_image 工具与它的实现' },
     // 这三处让 pet_show_image 也认「相对桌宠工作区」的路径；最后一条依赖上面那条先插好方法。
     { id: 'pet-workspace-option', file: join(pet, 'world.ts'), what: '桌宠包选项加 workspaceDir' },
@@ -480,34 +362,6 @@ export function patchSpecs(appRoot) {
 export function rulesFor(id) {
   const nl = (text) => (text.includes('\r\n') ? '\r\n' : '\n');
   switch (id) {
-    case 'client-say-images':
-      return {
-        done: (text) => {
-          const r = patchClient(text);
-          return !r.error && r.changed === false;
-        },
-        apply: (text) => {
-          const r = patchClient(text);
-          if (r.error) return { error: r.error };
-          return { text: r.text };
-        },
-      };
-    case 'pet-say-type':
-      return {
-        done: (text) => text.includes(CHAT_ITEM_SAY_NEW),
-        apply: (text) => {
-          const out = swap(text, CHAT_ITEM_SAY_OLD, CHAT_ITEM_SAY_NEW);
-          return out === null ? { error: '没找到 say 的 ChatItem 类型行' } : { text: out };
-        },
-      };
-    case 'pet-say-images':
-      return {
-        done: (text) => text.includes('coopanion-chat-image: 桌宠自己的话也能带图'),
-        apply: (text) => {
-          const out = swap(text, asWritten(CHAT_SAY_OLD, nl(text)), asWritten(CHAT_SAY_NEW, nl(text)));
-          return out === null ? { error: '没找到 chatItem 的 say 分支' } : { text: out };
-        },
-      };
     case 'pet-fs-import':
       return {
         done: (text) => importHas(text, 'node:fs', ['readFileSync']),
@@ -517,25 +371,6 @@ export function rulesFor(id) {
       return {
         done: (text) => importHas(text, 'node:path', ['basename', 'extname', 'isAbsolute']),
         apply: (text) => withImport(text, 'node:path', ['basename', 'extname', 'isAbsolute']),
-      };
-    case 'pet-record-blobs':
-      return {
-        done: (text) => text.includes('text: string, blobs?: BlobInput[]'),
-        apply: (text) => {
-          const head = swap(
-            text,
-            '  private async record(meta: Record<string, unknown>, text: string): Promise<number | null> {',
-            '  private async record(meta: Record<string, unknown>, text: string, blobs?: BlobInput[]): Promise<number | null> {',
-          );
-          if (head === null) return { error: '没找到 record() 的签名' };
-          const body = swap(
-            head,
-            "      const e = await host.pushEvent({ type: SELF_TYPE, source: this.id, senderKey: SELF_TYPE, ts: nowIso(this.opts.timezone), text, meta }, { deliver: false });",
-            "      const e = await host.pushEvent({ type: SELF_TYPE, source: this.id, senderKey: SELF_TYPE, ts: nowIso(this.opts.timezone), text, meta, ...(blobs?.length ? { blobs } : {}) }, { deliver: false });",
-          );
-          if (body === null) return { error: '没找到 record() 里的 pushEvent' };
-          return { text: body };
-        },
       };
     case 'pet-show-image-tool':
       return {

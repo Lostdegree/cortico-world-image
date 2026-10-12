@@ -4,7 +4,6 @@
  *
  *   node tools/patch.mjs              在副本上自测（幂等、语法、坏原文必须报失败、还原）
  *   node tools/patch.mjs --apply      打到真实安装上（默认自动找 resources/app）
- *   node tools/patch.mjs --verify     用打过补丁的 chat.ts 真跑一遍 chatItem
  *   node tools/patch.mjs --restart    请控制台重启，让桌宠那一侧的补丁装载
  *   node tools/patch.mjs --backups    看每处补丁与它的 .coopanion-orig 备份
  *   node tools/patch.mjs --restore    按备份还原（撤销补丁；可逆，之后能再打）
@@ -16,10 +15,9 @@
  * `--port <端口>` 指定控制台端口，默认读 `<安装>/data/home/companion/config.json` 的 web.port。
  */
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
 
 import { applyChatImagePatches, consolePort, patchBackupStatus, requestConsoleRestart, resolveAppRoot, restoreChatImagePatches, rulesFor } from '../src/chat-image-patch.js';
 
@@ -31,11 +29,10 @@ const opt = (name, fallback = '') => {
 };
 
 const wantApply = flag('apply');
-const wantVerify = flag('verify');
 const wantRestart = flag('restart');
 const wantRestore = flag('restore');
 const wantBackups = flag('backups') || flag('backup');
-const wantSelfTest = !wantApply && !wantVerify && !wantRestart && !wantRestore && !wantBackups;
+const wantSelfTest = !wantApply && !wantRestart && !wantRestore && !wantBackups;
 
 const PACKAGE_DIR = resolve(import.meta.dirname, '..');
 const here = (...p) => join(PACKAGE_DIR, ...p);
@@ -61,61 +58,6 @@ function findAppRoot() {
 function pristine(src) {
   const orig = `${src}.coopanion-orig`;
   return existsSync(orig) ? orig : src;
-}
-
-/**
- * 把补丁插进 bundle 的那段 say 渲染代码抽出来，用假 DOM 真跑一遍：
- * 变量名不写死（`ui`/`blob`/`mood` 都从抽出来的代码里认），证明它在那个作用域里跑得通、
- * 有图就真的 append 出 chat-thumb。
- */
-function clientSayHarness(client) {
-  const mark = client.indexOf('/*COOPANION_CHAT_IMAGE*/');
-  if (mark < 0) return { ok: false, reason: 'bundle 里找不到补丁标记' };
-  const head = client.lastIndexOf('if(', mark);
-  if (head < 0) return { ok: false, reason: '标记前面找不到 if(' };
-  const open = client.indexOf('{', head);
-  let depth = 0;
-  let end = -1;
-  for (let i = open; i < client.length; i += 1) {
-    const c = client[i];
-    if (c === '{') depth += 1;
-    else if (c === '}') { depth -= 1; if (depth === 0) { end = i + 1; break } }
-  }
-  if (end < 0) return { ok: false, reason: '花括号没配上' };
-  const src = client.slice(head, end);
-  const m = /^if\(([A-Za-z_$][\w$]*)\.kind==="say"\)\{for\(let ([A-Za-z_$][\w$]*) of \1\.beats\)\{/.exec(src);
-  if (!m) return { ok: false, reason: `抽出来的不像 say 渲染：${src.slice(0, 60)}` };
-  const container = /([A-Za-z_$][\w$]*)\.append\(__coopanionRow\)/.exec(src)?.[1];
-  if (!container) return { ok: false, reason: '认不出容器变量' };
-  const ui = /([A-Za-z_$][\w$]*)\.h\("div","sayrow"\)/.exec(src)?.[1];
-  const blob = /([A-Za-z_$][\w$]*)\(__coopanionImg\.ref\)/.exec(src)?.[1];
-  const mood = /,"mood",([A-Za-z_$][\w$]*)\(/.exec(src)?.[1];
-  if (!ui || !blob || !mood) return { ok: false, reason: `认不出变量（ui=${ui} blob=${blob} mood=${mood}）` };
-  const node = (tag, cls, text) => ({ tag, cls, text, children: [], append(c) { this.children.push(c); return this } });
-  const uiKit = { h: (tag, cls, text) => node(tag, cls, text) };
-  const blobUrl = (ref) => `/api/console/providers/world%3Adesktop-pet/panels/chat/blob?args=${encodeURIComponent(ref)}`;
-  const run = (value) => {
-    const box = node('div');
-    // eslint-disable-next-line no-new-func
-    new Function(m[1], container, ui, blob, mood, src)(value, box, uiKit, blobUrl, () => 'MOOD');
-    return box;
-  };
-  const flat = (n) => [n, ...n.children.flatMap(flat)];
-  const box = run({ kind: 'say', beats: [{ text: '看这个', mood: { a: 'b' } }], images: [{ ref: 'log:x.png', mime: 'image/png', name: 'x.png' }] });
-  const textOnly = run({ kind: 'say', beats: [{ text: '只有话' }] });
-  const imageOnly = run({ kind: 'say', beats: [], images: [{ ref: 'log:y.png', mime: 'image/png' }] });
-  const thumbs = (b) => flat(b).filter((n) => n.className === 'chat-thumb' || n.cls === 'chat-thumb');
-  return {
-    ok: true,
-    item: m[1],
-    container,
-    ui,
-    blob,
-    mood,
-    withImages: { thumbs: thumbs(box).map((n) => ({ src: n.src, alt: n.alt, tag: n.tag })), mood: flat(box).some((n) => n.cls === 'mood'), rows: box.children.length },
-    textOnly: { thumbs: thumbs(textOnly).length, rows: textOnly.children.length },
-    imageOnly: { thumbs: thumbs(imageOnly).length, rows: imageOnly.children.length },
-  };
 }
 
 /** esbuild 只做语法解析（不解析依赖、不打包）；loader 按扩展名自动认。 */
@@ -337,23 +279,17 @@ writeFileSync(${JSON.stringify(report)}, JSON.stringify(out, null, 2));
   return done;
 }
 
-/** 副本上自测：结构照抄一份真安装，只把要改的三个文件复制过去。 */
+/** 副本上自测：结构照抄一份真安装，只把要改的两个文件（world.ts + definition.ts）复制过去。 */
 function selfTest(appRoot) {
   head(`自测（副本，源目录 ${appRoot}）`);
   const work = mkdtempSync(join(tmpdir(), 'coopanion-chat-image-'));
   const petSrc = join(appRoot, 'node_modules', 'cortico-world-desktop-pet', 'src');
-  const webSrc = join(appRoot, 'build', 'cortico', 'dist', 'web');
-  const entry = readdirSync(webSrc).filter((f) => /^main-.*\.js$/.test(f)).sort((a, b) => statSync(join(webSrc, b)).size - statSync(join(webSrc, a)).size)[0];
   const petDst = join(work, 'node_modules', 'cortico-world-desktop-pet', 'src');
-  const webDst = join(work, 'build', 'cortico', 'dist', 'web');
   mkdirSync(petDst, { recursive: true });
-  mkdirSync(webDst, { recursive: true });
   mkdirSync(join(work, 'build', 'cortico', 'src'), { recursive: true });
   writeFileSync(join(work, 'build', 'cortico', 'src', 'paths.ts'), 'export function repoRoot(): string { return "stub"; }\n');
-  copyFileSync(pristine(join(petSrc, 'chat.ts')), join(petDst, 'chat.ts'));
   copyFileSync(pristine(join(petSrc, 'world.ts')), join(petDst, 'world.ts'));
   copyFileSync(pristine(join(petSrc, 'definition.ts')), join(petDst, 'definition.ts'));
-  copyFileSync(pristine(join(webSrc, entry)), join(webDst, entry));
 
   // 可选补丁落在第三方 QQ 扩展上（真安装在 `<安装>/data/extensions/…`）：
   // 这里用 COOPANION_EXTENSIONS_DIR 指到副本里的一棵假扩展，不碰真安装。
@@ -364,9 +300,9 @@ function selfTest(appRoot) {
   const stateDir = join(work, 'state');
   const first = applyChatImagePatches(work, { stateDir });
   ok(first.appRoot === resolve(work), '认出这份 app', String(first.appRoot));
-  ok(first.results.length === 12, '一共 12 处补丁（含 2 处可选的 QQ 扩展）', `实际 ${first.results.length}`);
+  ok(first.results.length === 8, '一共 8 处补丁（含 2 处可选的 QQ 扩展）', `实际 ${first.results.length}`);
   ok(first.failed.length === 0, '全部改写成功', first.results.filter((r) => r.state !== 'patched').map((r) => `${r.id}:${r.state}:${r.error ?? ''}`).join(' / '));
-  ok(first.patched.length === 12 && first.restartPending === true, '第一轮：12 处新打，并请求重启', JSON.stringify(first.patched));
+  ok(first.patched.length === 8 && first.restartPending === true, '第一轮：8 处新打，并请求重启', JSON.stringify(first.patched));
   ok(existsSync(`${qqFile}.coopanion-orig`), 'QQ 扩展也留了原文备份', qqFile);
   const qqCheck = syntaxCheck(appRoot, qqFile);
   ok(qqCheck.skipped || qqCheck.code === 0, 'QQ 扩展改完能过 TS 语法', JSON.stringify(qqCheck));
@@ -406,81 +342,58 @@ function selfTest(appRoot) {
   // 自愈的第二幕：自动更新把文件覆写回去 → 再补一遍；已经请求过一轮重启还是缺，就记「卡住」不再请求（防重启死循环）。
   const work2 = mkdtempSync(join(tmpdir(), 'coopanion-chat-image-stuck-'));
   const pet2 = join(work2, 'node_modules', 'cortico-world-desktop-pet', 'src');
-  const web2 = join(work2, 'build', 'cortico', 'dist', 'web');
   mkdirSync(pet2, { recursive: true });
-  mkdirSync(web2, { recursive: true });
   mkdirSync(join(work2, 'build', 'cortico', 'src'), { recursive: true });
   writeFileSync(join(work2, 'build', 'cortico', 'src', 'paths.ts'), 'export function repoRoot(): string { return "stub"; }\n');
-  copyFileSync(pristine(join(petSrc, 'chat.ts')), join(pet2, 'chat.ts'));
   copyFileSync(pristine(join(petSrc, 'world.ts')), join(pet2, 'world.ts'));
   copyFileSync(pristine(join(petSrc, 'definition.ts')), join(pet2, 'definition.ts'));
-  copyFileSync(pristine(join(webSrc, entry)), join(web2, entry));
   const state2 = join(work2, 'state');
   const again1 = applyChatImagePatches(work2, { stateDir: state2 });
-  ok(again1.patched.length === 10 && again1.restartPending === true && again1.stuck === false, '自愈第一幕：打上 10 处并请求一次重启', JSON.stringify({ patched: again1.patched.length, pending: again1.restartPending, stuck: again1.stuck }));
-  copyFileSync(pristine(join(petSrc, 'chat.ts')), join(pet2, 'chat.ts'));
+  ok(again1.patched.length === 6 && again1.restartPending === true && again1.stuck === false, '自愈第一幕：打上 6 处并请求一次重启', JSON.stringify({ patched: again1.patched.length, pending: again1.restartPending, stuck: again1.stuck }));
+  copyFileSync(pristine(join(petSrc, 'world.ts')), join(pet2, 'world.ts'));
   const again2 = applyChatImagePatches(work2, { stateDir: state2 });
-  ok(again2.patched.includes('pet-say-images') && again2.failed.length === 0, '自愈第二幕：被覆写后照样补回来', JSON.stringify(again2.patched));
+  ok(again2.patched.includes('pet-workspace-option') && again2.failed.length === 0, '自愈第二幕：被覆写后照样补回来', JSON.stringify(again2.patched));
   ok(again2.restartPending === false && again2.stuck === true, '自愈第二幕：请求过重启仍缺 → 记卡住、不再重启', JSON.stringify({ pending: again2.restartPending, stuck: again2.stuck }));
   const saved2 = JSON.parse(readFileSync(join(state2, '.chat-image-patch.json'), 'utf8'));
-  ok(saved2.requested === true && saved2.appRoot === resolve(work2) && Array.isArray(saved2.patched) && saved2.patched.includes('pet-say-images'), '状态文件记下「请求过重启 + 这次补了哪些」', JSON.stringify(saved2));
+  ok(saved2.requested === true && saved2.appRoot === resolve(work2) && Array.isArray(saved2.patched) && saved2.patched.includes('pet-workspace-option'), '状态文件记下「请求过重启 + 这次补了哪些」', JSON.stringify(saved2));
   rmSync(work2, { recursive: true, force: true });
 
   // 还原：按 `.coopanion-orig` 把文件覆盖回去（备份留着），随后再自动补一遍照样能补上。
   const work3 = mkdtempSync(join(tmpdir(), 'coopanion-chat-image-restore-'));
   const pet3 = join(work3, 'node_modules', 'cortico-world-desktop-pet', 'src');
-  const web3 = join(work3, 'build', 'cortico', 'dist', 'web');
   mkdirSync(pet3, { recursive: true });
-  mkdirSync(web3, { recursive: true });
   mkdirSync(join(work3, 'build', 'cortico', 'src'), { recursive: true });
   writeFileSync(join(work3, 'build', 'cortico', 'src', 'paths.ts'), 'export function repoRoot(): string { return "stub"; }\n');
-  copyFileSync(pristine(join(petSrc, 'chat.ts')), join(pet3, 'chat.ts'));
   copyFileSync(pristine(join(petSrc, 'world.ts')), join(pet3, 'world.ts'));
   copyFileSync(pristine(join(petSrc, 'definition.ts')), join(pet3, 'definition.ts'));
-  copyFileSync(pristine(join(webSrc, entry)), join(web3, entry));
   const state3 = join(work3, 'state');
   const before3 = applyChatImagePatches(work3, { stateDir: state3 });
-  ok(before3.patched.length === 10 && before3.failed.length === 0, '还原前：10 处都打上了', JSON.stringify({ patched: before3.patched.length, failed: before3.failed }));
+  ok(before3.patched.length === 6 && before3.failed.length === 0, '还原前：6 处都打上了', JSON.stringify({ patched: before3.patched.length, failed: before3.failed }));
   const bk3 = patchBackupStatus(work3);
-  ok(bk3.length === 10 && bk3.every((b) => b.hasFile && b.hasBackup && b.patched && !b.same), '备份状态：10 处都有原文备份、都认成「已打过」', JSON.stringify(bk3.map((b) => `${b.id}:${b.hasBackup}/${b.patched}/${b.same}`)));
+  ok(bk3.length === 6 && bk3.every((b) => b.hasFile && b.hasBackup && b.patched && !b.same), '备份状态：6 处都有原文备份、都认成「已打过」', JSON.stringify(bk3.map((b) => `${b.id}:${b.hasBackup}/${b.patched}/${b.same}`)));
   const back3 = restoreChatImagePatches(work3, { stateDir: state3 });
-  // 10 处补丁落在 4 个文件上：每个文件还原一次，同一文件上后面的补丁就变成「本来就是原文」。
-  ok(back3.failed.length === 0 && back3.restored.length === 4 && back3.results.filter((r) => r.state !== 'absent').every((r) => r.state === 'restored' || r.state === 'same'), '还原：4 个文件各按备份覆盖一次（同一文件上的其余补丁认成 same）', JSON.stringify({ restored: back3.restored, states: back3.results.map((r) => `${r.id}:${r.state}`) }));
-  ok(readFileSync(join(pet3, 'chat.ts'), 'utf8') === readFileSync(pristine(join(petSrc, 'chat.ts')), 'utf8'), '还原后 chat.ts 与更新下发的原文逐字一致');
+  // 6 处补丁落在 2 个文件上：每个文件还原一次，同一文件上后面的补丁就变成「本来就是原文」。
+  ok(back3.failed.length === 0 && back3.restored.length === 2 && back3.results.filter((r) => r.state !== 'absent').every((r) => r.state === 'restored' || r.state === 'same'), '还原：2 个文件各按备份覆盖一次（同一文件上的其余补丁认成 same）', JSON.stringify({ restored: back3.restored, states: back3.results.map((r) => `${r.id}:${r.state}`) }));
   ok(readFileSync(join(pet3, 'world.ts'), 'utf8') === readFileSync(pristine(join(petSrc, 'world.ts')), 'utf8'), '还原后 world.ts 与原文逐字一致');
   ok(readFileSync(join(pet3, 'definition.ts'), 'utf8') === readFileSync(pristine(join(petSrc, 'definition.ts')), 'utf8'), '还原后 definition.ts 与原文逐字一致');
-  ok(readFileSync(join(web3, entry), 'utf8') === readFileSync(pristine(join(webSrc, entry)), 'utf8'), '还原后客户端 bundle 与原文逐字一致');
   const bk3b = patchBackupStatus(work3);
   ok(bk3b.every((b) => b.hasBackup && b.same && !b.patched), '还原后：备份还在，状态变成「未打」', JSON.stringify(bk3b.map((b) => `${b.id}:${b.hasBackup}/${b.same}/${b.patched}`)));
   const saved3 = JSON.parse(readFileSync(join(state3, '.chat-image-patch.json'), 'utf8'));
-  ok(Array.isArray(saved3.restored) && saved3.restored.length === 4 && saved3.patched.length === 0 && saved3.requested === false, '状态文件记下「还原了哪些」', JSON.stringify({ restored: saved3.restored, patched: saved3.patched, requested: saved3.requested }));
+  ok(Array.isArray(saved3.restored) && saved3.restored.length === 2 && saved3.patched.length === 0 && saved3.requested === false, '状态文件记下「还原了哪些」', JSON.stringify({ restored: saved3.restored, patched: saved3.patched, requested: saved3.requested }));
   const back3b = restoreChatImagePatches(work3, { stateDir: state3 });
   ok(back3b.restored.length === 0 && back3b.results.filter((r) => r.state !== 'absent').every((r) => r.state === 'same'), '再还原一次：认成「本来就是原文」，不重复覆盖');
   const after3 = applyChatImagePatches(work3, { stateDir: state3 });
-  ok(after3.patched.length === 10 && after3.failed.length === 0, '还原之后还能重新打上（还原是可逆的）', JSON.stringify({ patched: after3.patched.length, failed: after3.failed }));
+  ok(after3.patched.length === 6 && after3.failed.length === 0, '还原之后还能重新打上（还原是可逆的）', JSON.stringify({ patched: after3.patched.length, failed: after3.failed }));
   rmSync(work3, { recursive: true, force: true });
 
-  const chat = readFileSync(join(petDst, 'chat.ts'), 'utf8');
   const world = readFileSync(join(petDst, 'world.ts'), 'utf8');
-  const client = readFileSync(join(webDst, entry), 'utf8');
-  ok(chat.includes('const images = (e.blobs ?? [])') && chat.includes('images?: WireImage[]'), 'chat.ts：say 分支带图 + 类型有 images');
   ok(world.includes('pet_show_image') && world.includes('sniffImageMime') && world.includes("tags: ['act']"), 'world.ts：pet_show_image 工具与实现');
   ok(world.includes('workspaceDir?: () => string;'), 'world.ts：世界选项多了 workspaceDir（装配层注入）');
   ok(world.includes("    let raw = typeof args.path === 'string' ? args.path.trim() : '';"), 'world.ts：路径那行改成 let（不然相对路径拼不上）');
   ok(world.includes('raw = join(ws, raw);') && world.includes('this.opts.workspaceDir?.()'), 'world.ts：相对路径真的拼到桌宠工作区上');
   ok(world.includes('blobs/xx.jpg'), 'world.ts：工具说明写明可以给相对工作区的路径');
-  ok(world.includes('text, meta, ...(blobs?.length ? { blobs } : {})'), 'world.ts：record() 能把附件写进事件');
-  ok(client.includes('/*COOPANION_CHAT_IMAGE*/') && client.includes('"chat-thumb"') && client.includes('images.length'), '客户端 bundle：say 行会画 chat-thumb');
-  const harness = clientSayHarness(client);
-  ok(harness.ok, '能从 bundle 里抽出 say 渲染那段', harness.reason);
-  if (harness.ok) {
-    ok(harness.withImages.thumbs.length === 1 && harness.withImages.thumbs[0].tag === 'img' && harness.withImages.thumbs[0].src.includes('x.png'), '带图的 say：真 append 出一张 chat-thumb', JSON.stringify(harness.withImages));
-    ok(harness.withImages.mood === true && harness.withImages.rows === 2, '带图的 say：配文行与图行都在');
-    ok(harness.textOnly.thumbs === 0 && harness.textOnly.rows === 1, '没有图时照旧只有配文行');
-    ok(harness.imageOnly.thumbs === 1 && harness.imageOnly.rows === 1, '只发图（beats 空）：也能画出一行');
-  }
-  ok(existsSync(join(petDst, 'chat.ts.coopanion-orig')), '改写前留了 .coopanion-orig 备份');
-  ok(readFileSync(join(petDst, 'chat.ts.coopanion-orig'), 'utf8') === readFileSync(pristine(join(petSrc, 'chat.ts')), 'utf8'), '备份是改写前的原文');
+  ok(existsSync(join(petDst, 'world.ts.coopanion-orig')), '改写前留了 .coopanion-orig 备份');
+  ok(readFileSync(join(petDst, 'world.ts.coopanion-orig'), 'utf8') === readFileSync(pristine(join(petSrc, 'world.ts')), 'utf8'), '备份是改写前的原文');
   const worldTools = toolsReturnHarness(join(petDst, 'world.ts'));
   ok(worldTools.ok, 'tools() 真跑一遍：扁平数组、每项都有名字、含 pet_show_image', worldTools.reason || JSON.stringify(worldTools.names));
 
@@ -494,46 +407,34 @@ function selfTest(appRoot) {
     ok(showRun.noWs.includes('相对路径没有工作区可拼'), '装配层没给工作区时明确报错', showRun.noWs);
   }
 
-  const s1 = syntaxCheck(appRoot, join(petDst, 'chat.ts'), 'ts');
   const s2 = syntaxCheck(appRoot, join(petDst, 'world.ts'), 'ts');
-  const s3 = syntaxCheck(appRoot, join(webDst, entry), 'js');
   const s4 = syntaxCheck(appRoot, join(petDst, 'definition.ts'), 'ts');
-  if (s1.skipped) console.log('  ..   esbuild 不在，跳过语法检查');
+  if (s2.skipped) console.log('  ..   esbuild 不在，跳过语法检查');
   else {
-    ok(s1.code === 0, 'chat.ts 语法通过（esbuild）', s1.error || String(s1.code));
     ok(s2.code === 0, 'world.ts 语法通过（esbuild）', s2.error || String(s2.code));
-    ok(s3.code === 0, '客户端 bundle 语法通过（esbuild）', s3.error || String(s3.code));
     ok(s4.code === 0, 'definition.ts 语法通过（esbuild）', s4.error || String(s4.code));
   }
 
   // 反向用例：原文被改过时必须报失败，而不是硬猜着改。
   const bad = join(work, 'bad');
   const badPet = join(bad, 'node_modules', 'cortico-world-desktop-pet', 'src');
-  const badWeb = join(bad, 'build', 'cortico', 'dist', 'web');
   mkdirSync(badPet, { recursive: true });
-  mkdirSync(badWeb, { recursive: true });
   mkdirSync(join(bad, 'build', 'cortico', 'src'), { recursive: true });
   writeFileSync(join(bad, 'build', 'cortico', 'src', 'paths.ts'), 'export function repoRoot(): string { return "stub"; }\n');
-  writeFileSync(join(badPet, 'chat.ts'), readFileSync(pristine(join(petSrc, 'chat.ts')), 'utf8').replace("if (m.kind === 'say' && Array.isArray(m.beats)) {", "if (m.kind === 'say' && Array.isArray(m.beats)) { /* 上游改过这里 */"));
-  writeFileSync(join(badPet, 'world.ts'), readFileSync(pristine(join(petSrc, 'world.ts')), 'utf8'));
+  writeFileSync(join(badPet, 'world.ts'), readFileSync(pristine(join(petSrc, 'world.ts')), 'utf8').replace('  private notConnected(tool: string): ToolOutcome {', '  private notConnectedRenamed(tool: string): ToolOutcome {'));
   writeFileSync(join(badPet, 'definition.ts'), readFileSync(pristine(join(petSrc, 'definition.ts')), 'utf8'));
-  copyFileSync(pristine(join(webSrc, entry)), join(badWeb, entry));
   const third = applyChatImagePatches(bad, { stateDir: join(bad, 'state') });
-  ok(third.failed.includes('pet-say-images'), '原文对不上时记失败：pet-say-images', JSON.stringify(third.failed));
-  ok(third.results.find((r) => r.id === 'pet-say-images')?.state === 'failed', '失败项状态是 failed');
-  ok(third.patched.length > 0, '同一份文件里别的补丁照常打上');
+  ok(third.failed.includes('pet-show-image-tool'), '原文对不上时记失败：pet-show-image-tool', JSON.stringify(third.failed));
+  ok(third.results.find((r) => r.id === 'pet-show-image-tool')?.state === 'failed' && third.results.find((r) => r.id === 'pet-show-image-tool')?.error, '失败项状态是 failed 并给出原因', JSON.stringify(third.results.find((r) => r.id === 'pet-show-image-tool')));
+  ok(third.patched.length === 4, '同一份文件里别的补丁照常打上（world.ts 里不依赖 showImage() 的那几条）', JSON.stringify(third.patched));
 
   // 上一版写坏的 `[EXPR, TOOL]`（嵌套数组）要能被认出来并修成扁平的。
   const work4 = mkdtempSync(join(tmpdir(), 'coopanion-chat-image-nested-'));
   const pet4 = join(work4, 'node_modules', 'cortico-world-desktop-pet', 'src');
-  const web4 = join(work4, 'build', 'cortico', 'dist', 'web');
   mkdirSync(pet4, { recursive: true });
-  mkdirSync(web4, { recursive: true });
   mkdirSync(join(work4, 'build', 'cortico', 'src'), { recursive: true });
   writeFileSync(join(work4, 'build', 'cortico', 'src', 'paths.ts'), 'export function repoRoot(): string { return "stub"; }\n');
-  copyFileSync(pristine(join(petSrc, 'chat.ts')), join(pet4, 'chat.ts'));
   copyFileSync(pristine(join(petSrc, 'definition.ts')), join(pet4, 'definition.ts'));
-  copyFileSync(pristine(join(webSrc, entry)), join(web4, entry));
   const nestedWorld = (() => {
     const src = readFileSync(pristine(join(petSrc, 'world.ts')), 'utf8');
     const at4 = /tools\(\): ToolDef\[\] \{/.exec(src);
@@ -553,42 +454,6 @@ function selfTest(appRoot) {
 
   rmSync(work, { recursive: true, force: true });
   return failures.length === 0;
-}
-
-/** 用打过补丁的 chat.ts 真跑 chatItem（tsx 直接吃 TS，且 chat.ts 只有 type 导入）。 */
-function verify(appRoot) {
-  head('验证（真跑打过补丁的 chatItem）');
-  const chatTs = join(appRoot, 'node_modules', 'cortico-world-desktop-pet', 'src', 'chat.ts');
-  const tsx = join(appRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs');
-  if (!existsSync(chatTs)) return ok(false, `找不到 ${chatTs}`);
-  if (!existsSync(tsx)) return ok(false, `找不到 tsx：${tsx}`);
-  const scratch = mkdtempSync(join(tmpdir(), 'coopanion-verify-'));
-  const script = join(scratch, 'verify.mts');
-  const report = join(scratch, 'report.json');
-  writeFileSync(script, `import { writeFileSync } from 'node:fs';
-import { chatItem } from ${JSON.stringify(pathToFileURL(chatTs).href)};
-
-const out: Record<string, unknown> = {};
-const envelope = (meta: Record<string, unknown>, blobs: unknown[]) => ({ cursor: 12, ts: '2026-01-01T00:00:00.000Z', type: 'desktop-pet.self', meta, blobs, contextDelivery: 'deliver' });
-const blob = { handle: 'log:abc123.png', mime: 'image/png', name: 'live-test.png' };
-
-out.withImage = chatItem(envelope({ kind: 'say', beats: [{ text: '看这个' }] }, [blob]));
-out.imageOnly = chatItem(envelope({ kind: 'say', beats: [] }, [blob]));
-out.textOnly = chatItem(envelope({ kind: 'say', beats: [{ text: '只有话' }] }, []));
-out.otherBlob = chatItem(envelope({ kind: 'say', beats: [{ text: '附件不是图' }] }, [{ handle: 'log:x.txt', mime: 'text/plain' }]));
-writeFileSync(${JSON.stringify(report)}, JSON.stringify(out, null, 2));
-`);
-  const res = spawnSync(process.execPath, [tsx, script], { stdio: ['ignore', 'inherit', 'inherit'] });
-  if (!existsSync(report)) return ok(false, 'tsx 没能跑出报告', res.error ? String(res.error) : `exit ${res.status}`);
-  const out = JSON.parse(readFileSync(report, 'utf8'));
-  const imgs = (item) => item?.images ?? [];
-  ok(imgs(out.withImage).length === 1 && imgs(out.withImage)[0].ref === 'log:abc123.png', '带图的话：images 有那 1 张', JSON.stringify(out.withImage));
-  ok(out.withImage?.beats?.[0]?.text === '看这个', '带图的话：配文还在');
-  ok(imgs(out.imageOnly).length === 1 && out.imageOnly?.beats?.length === 0, '只发图（没有配文）也成立', JSON.stringify(out.imageOnly));
-  ok(imgs(out.textOnly).length === 0 && out.textOnly?.beats?.length === 1, '没有附件时照旧只有文字');
-  ok(imgs(out.otherBlob).length === 0 && out.otherBlob?.beats?.length === 1, '非图片附件不算图');
-  ok(typeof out.withImage?.cursor === 'number' && out.withImage.cursor === 12, '游标照旧传下去');
-  rmSync(scratch, { recursive: true, force: true });
 }
 
 /** 控制台端口：优先命令行，其次安装里的 config.json。 */
@@ -652,7 +517,6 @@ if (wantSelfTest) selfTest(appRoot);
 if (wantBackups) backups(appRoot);
 if (wantRestore) restore(appRoot);
 if (wantApply) apply(appRoot);
-if (wantVerify) verify(appRoot);
 if (wantRestart) {
   const port = consolePortOf(appRoot);
   head(`重启控制台（端口 ${port}）`);

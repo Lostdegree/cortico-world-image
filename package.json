@@ -1,6 +1,6 @@
 {
   "name": "cortico-world-image",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "type": "module",
   "description": "Image Studio — a cortico World extension that lets the bot draw pictures through any OpenAI-compatible image API, keep them on disk and show them in the console.",
   "license": "MIT",

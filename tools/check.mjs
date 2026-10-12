@@ -612,10 +612,16 @@ try {
   }
   const specs = patchMod.patchSpecs('X:/not-a-real-app');
   const specIds = specs.map((s) => s.id);
-  check(specIds.length === 12, '补丁一共 12 处（7 处自带 + 3 处桌宠工作区相对路径 + 2 处可选的 QQ 扩展）', String(specIds.length));
+  check(specIds.length === 8, '补丁一共 8 处（5 处打 world.ts + 1 处打 definition.ts + 2 处可选的 QQ 扩展）', String(specIds.length));
   check(new Set(specIds).size === specIds.length, '补丁 id 不重复', specIds.join(','));
-  const wantIds = ['client-say-images', 'pet-say-images', 'pet-say-type', 'pet-fs-import', 'pet-path-import', 'pet-record-blobs', 'pet-show-image-tool', 'pet-workspace-option', 'pet-workspace-relpaths', 'pet-workspace-wire', 'qq-image-relpaths', 'qq-image-hints'];
-  check(wantIds.every((id) => specIds.includes(id)), '12 处补丁 id 齐全', specIds.join(','));
+  const wantIds = ['pet-fs-import', 'pet-path-import', 'pet-show-image-tool', 'pet-workspace-option', 'pet-workspace-relpaths', 'pet-workspace-wire', 'qq-image-relpaths', 'qq-image-hints'];
+  check(wantIds.every((id) => specIds.includes(id)), '8 处补丁 id 齐全', specIds.join(','));
+  check(specIds.every((id) => wantIds.includes(id)), '没有多余的补丁 id', specIds.join(','));
+  // 防回归：框架 0.1.23 起原生就能把 say 的图发到对话页（chat.ts 的 wireImages() + 客户端 chat-thumb 缩略图），
+  // 这 4 处补丁已经删掉，不许再回来（锚点早就不匹配，留着只会每次启动都记一条失败）。
+  for (const gone of ['client-say-images', 'pet-say-images', 'pet-record-blobs', 'pet-say-type']) {
+    check(!specIds.includes(gone), `补丁 ${gone} 已删掉（框架原生已覆盖），不许再出现`, specIds.join(','));
+  }
   for (const spec of specs) check(typeof spec.what === 'string' && spec.what.length > 4, `补丁 ${spec.id} 有说明`, spec.what);
   const qqSpecs = specs.filter((s) => s.id.startsWith('qq-'));
   check(qqSpecs.length === 2 && qqSpecs.every((s) => s.optional === true), 'QQ 扩展那两处是可选补丁（没装就不算失败）', JSON.stringify(qqSpecs.map((s) => ({ id: s.id, optional: s.optional }))));
