@@ -15,6 +15,10 @@ index.json
 scratch/
 *.tmp
 
+# npm 发布相关的本地产物
+.npm-cache/
+*.tgz
+
 # 编辑器 / 系统
 .vscode/
 .idea/

@@ -2,16 +2,26 @@
   "name": "cortico-world-image",
   "version": "0.1.2",
   "type": "module",
-  "description": "Image Studio — a cortico World extension that lets the bot draw pictures through any OpenAI-compatible image API, keep them on disk and show them in the console.",
+  "description": "Image Studio（图片工坊）—— 给 Coopanion 桌宠的 cortico World 扩展：用任意 OpenAI 兼容的图片接口画图/改图、落盘成作品库、把图贴进控制台「对话」页，并自带一套自动重打的自愈补丁。 / A cortico World extension that draws through any OpenAI-compatible image API, keeps pictures on disk and shows them in the console.",
   "license": "MIT",
   "author": "lostdegree",
+  "homepage": "https://github.com/Lostdegree/cortico-world-image#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Lostdegree/cortico-world-image.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Lostdegree/cortico-world-image/issues"
+  },
   "keywords": [
     "cortico-world",
     "cortico",
     "coopanion",
     "image",
     "image-generation",
-    "text-to-image"
+    "text-to-image",
+    "openai-compatible",
+    "gpt-image"
   ],
   "engines": {
     "node": ">=22"
@@ -23,9 +33,17 @@
   "files": [
     "src",
     "dist",
+    "tools",
     "ENV_PROMPT.md",
     "README.md"
   ],
+  "scripts": {
+    "selfcheck": "node tools/prepublish.mjs",
+    "prepublishOnly": "node tools/prepublish.mjs"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "cortico": {
     "kind": "world",
     "api": 5,

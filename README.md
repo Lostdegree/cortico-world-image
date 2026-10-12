@@ -192,9 +192,9 @@
 修法是抬版本 + 重启，主程序会在 Core 就绪时自动重载控制台外壳（
 `resources\app\app\main.cjs:285` `if (settings) settings.loadURL(consoleUrl());`）：
 
-1. 把 `package.json` 的 `version` 抬一格（例如 `0.1.0` → `0.1.1`）；
+1. 把 `package.json` 的 `version` 抬一格（例如 `0.1.1` → `0.1.2`）；
 2. 重启控制台（状态页「重启控制台」或 `node tools/patch.mjs --restart`）；
-3. 程序内窗口自动重载 → 新的 URL `/assets/extensions/cortico-world-image/0.1.1/console.js`
+3. 程序内窗口自动重载 → 新的 URL `/assets/extensions/cortico-world-image/0.1.2/console.js`
    取到新脚本，旧 URL 立刻变 404。
 
 不想抬版本也行，但要**先完全退出程序**再删缓存目录：`<安装>\data\Cache`、
@@ -220,13 +220,26 @@ node tools/patch.mjs --app <安装目录>\resources\app --restart   # 请控制�
 
 ## 安装
 
-包目录就是你现在看的这个目录。三种装法，选一种：
+这个包按 npm 包发布（包名 `cortico-world-image`，维护者的发布流程见 [PUBLISH.md](PUBLISH.md)）：
+registry 上有版本时直接从 npm 装；想自己改代码、或者 `npm view cortico-world-image version` 还查不到版本，
+就用下面的本地装法。
 
-**A. 控制台里装（推荐）**
+**A. 从 npm 装（推荐，不用下载源码）**
 
-设置 → 扩展 → 安装本地扩展，把本目录选给它。
+控制台 → 设置 → 扩展 → 搜 `cortico-world-image`（或按关键词 `cortico-world` 搜）→ 安装。
+或者用命令行，在 `data/extensions` 目录里（`extensions/package.json` 所在处）执行：
 
-**B. 命令行装**
+```powershell
+pnpm add cortico-world-image --ignore-workspace        # 想钉住版本就写 cortico-world-image@0.1.2
+```
+
+装完重启。升级同理：重跑一遍（控制台的「扩展」页会显示已装版本与最新版本），装完同样要重启。
+
+**B. 控制台里装本地目录**
+
+如果你已经把源码拉下来了：设置 → 扩展 → 安装本地扩展，把本目录选给它。
+
+**C. 命令行装本地目录**
 
 在 `data/extensions` 目录里（`extensions/package.json` 所在处）执行：
 
@@ -236,7 +249,7 @@ pnpm add "D:\path\to\cortico-world-image" --ignore-workspace
 
 它会往 `extensions/package.json` 的 `dependencies` 里写一条 `link:` 路径并连到 `node_modules/`。
 
-**C. 手工连**
+**D. 手工连**
 
 把 `data/extensions/node_modules/cortico-world-image` 做成指向本目录的目录联接，
 并自己在 `extensions/package.json` 里加 `"cortico-world-image": "link:D:\\path\\to\\cortico-world-image"`。
@@ -324,7 +337,7 @@ pnpm add "D:\path\to\cortico-world-image" --ignore-workspace
 走完「落盘 → 索引 → 面板取图 → 缩略图显示」整条路。看不到这张图，说明是扩展或面板的问题，
 不是图片接口的问题。
 
-开发侧还有两份检查脚本。
+开发侧一共有四份检查脚本，外加一份发布前自检。
 
 不碰 DOM 的那份覆盖模块形状、dry-mount 那套判据、工具回执、索引与两个面板的挂载（自带假 DOM）：
 
@@ -362,12 +375,26 @@ node tools/live.mjs                                       # 可加 LIVE_BASE_URL
 node tools/patch.mjs
 ```
 
+第五份是**发布前自检**：按宿主 `manifest.ts` 的同一套规则验 `package.json`（`type: module`、
+`cortico.api` 是否等于当前框架的 `world` 契约、`consoleClient` 是否真在包里、keywords 里有没有
+`cortico-world`）、按 `files` 展开一遍发布物、扫本机路径与私有端点之类的痕迹、逐个 `node --check`，
+然后自动跑上面的 `check.mjs`（找得到本机 Coopanion 安装时连 `patch.mjs` 自测与 `drymount.mts` 一起跑）。
+
+```powershell
+node tools/prepublish.mjs                              # 或 npm run selfcheck
+node tools/prepublish.mjs --app D:\Coopanion\resources\app
+node tools/prepublish.mjs --only-static                # 只做静态检查
+```
+
+`npm publish` 之前它会自动跑一遍（挂在 `prepublishOnly` 上），没过就不发包。
+
 ## 目录结构
 
 ```
 cortico-world-image/
 ├─ package.json        # cortico: { kind: world, api: 5, consoleClient: dist/console.js }
 ├─ README.md
+├─ PUBLISH.md          # 发布流程（维护者用，不打进 npm 包）
 ├─ ENV_PROMPT.md       # 随环境提示词交给桌宠的说明（含 {{image.dir}} / {{image.ready}} 占位符）
 ├─ src/
 │  ├─ index.js         # 入口：default 导出 WorldDefinition
@@ -383,7 +410,8 @@ cortico-world-image/
    ├─ check.mjs        # 离线检查（自带假 DOM）
    ├─ drymount.mts     # 用框架自带判据跑 dry-mount
    ├─ live.mjs         # 联网真画一张（自测整条链路）
-   └─ patch.mjs        # 对话页发图补丁：自测 / --apply / --backups / --restore / --restart
+   ├─ patch.mjs        # 对话页发图补丁：自测 / --apply / --backups / --restore / --restart
+   └─ prepublish.mjs   # 发布前自检：契约 / files / 隐私串 / 语法，顺手跑上面几套
 ```
 
 ## 已知限制
@@ -397,6 +425,19 @@ cortico-world-image/
 - `image_edit` 要求端点真的支持 `/images/edits`；不支持的端点会回一条带 HTTP 码的错误，不是静默失败。
 - 只有 Windows 上的「打开文件夹」会真的弹资源管理器；其他平台返回一句说明。
 - 画图本身要联网，只有自检样图是纯本地的。
+
+## 发布（维护者）
+
+这个仓库同时就是 npm 包 `cortico-world-image` 的源码。发一版的流程：
+
+1. 改完代码、跑完自检（`node tools/prepublish.mjs --app <安装目录>\resources\app` 全绿）；
+2. 抬 `package.json` 的 `version`（改了 `dist/console.js` 必须抬，否则浏览器缓存旧脚本）；
+3. 把本仓库整份同步到发布目录（一份纯产物副本，`npm publish` 的根）；
+4. 提交并推进 GitHub；
+5. 在发布目录里 `npm publish --registry https://registry.npmjs.org/`。
+
+README 里只写结论，**逐步命令、npm 账号/Token、registry、缓存目录、撤回与常见报错都写在
+[PUBLISH.md](PUBLISH.md)**。要点：`npm publish` 会自动先跑 `tools/prepublish.mjs`，没过就不发包。
 
 ## 许可
 
