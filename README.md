@@ -192,9 +192,9 @@
 修法是抬版本 + 重启，主程序会在 Core 就绪时自动重载控制台外壳（
 `resources\app\app\main.cjs:285` `if (settings) settings.loadURL(consoleUrl());`）：
 
-1. 把 `package.json` 的 `version` 抬一格（例如 `0.1.1` → `0.1.2`）；
+1. 把 `package.json` 的 `version` 抬一格（例如 `0.1.2` → `0.1.3`）；
 2. 重启控制台（状态页「重启控制台」或 `node tools/patch.mjs --restart`）；
-3. 程序内窗口自动重载 → 新的 URL `/assets/extensions/cortico-world-image/0.1.2/console.js`
+3. 程序内窗口自动重载 → 新的 URL `/assets/extensions/cortico-world-image/0.1.3/console.js`
    取到新脚本，旧 URL 立刻变 404。
 
 不想抬版本也行，但要**先完全退出程序**再删缓存目录：`<安装>\data\Cache`、
@@ -230,7 +230,7 @@ registry 上有版本时直接从 npm 装；想自己改代码、或者 `npm vie
 或者用命令行，在 `data/extensions` 目录里（`extensions/package.json` 所在处）执行：
 
 ```powershell
-pnpm add cortico-world-image --ignore-workspace        # 想钉住版本就写 cortico-world-image@0.1.2
+pnpm add cortico-world-image --ignore-workspace        # 想钉住版本就写 cortico-world-image@0.1.3
 ```
 
 装完重启。升级同理：重跑一遍（控制台的「扩展」页会显示已装版本与最新版本），装完同样要重启。
