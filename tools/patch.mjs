@@ -88,6 +88,11 @@ function toolsReturnHarness(worldFile) {
   const seg = text.slice(at.index, at.index + 3000);
   const rm = /^([ \t]*)return ([^\n]*);$/m.exec(seg);
   if (!rm) return { ok: false, reason: '没找到 tools() 里的 return' };
+  // 那句 return 会引用方法体里前面声明的局部量（桌宠 0.1.23 起是 `const own = petToolDecls(…)`）。
+  // 桩里把它们都声明成「两个假工具」的数组：真跑时若还有没桩到的名字，报错才说明补丁真的坏了。
+  const locals = [...seg.slice(0, rm.index).matchAll(/^[ \t]*const ([A-Za-z_$][\w$]*)\s*=/gm)]
+    .map((m) => m[1])
+    .filter((name, i, all) => all.indexOf(name) === i);
   const dir = mkdtempSync(join(tmpdir(), 'coopanion-tools-return-'));
   const file = join(dir, 'run.mjs');
   const report = join(dir, 'out.json');
@@ -99,7 +104,8 @@ function toolsReturnHarness(worldFile) {
       "const petToolDecls = () => [{ name: 'pet_say' }, { name: 'pet_ask' }];",
       'const handlers = { pet_say: () => {}, pet_ask: () => {}, pet_walk_to: () => {} };',
       "const CHAT_IMAGE_TOOL = { name: 'pet_show_image' };",
-      "const world = { appLanguage: 'zh', showImage: () => ({ text: 'ok' }) };",
+      ...locals.map((name) => `const ${name} = petToolDecls('zh');`),
+      "const world = { appLanguage: 'zh', cuaOn: false, cua: { tools: () => [] }, showImage: () => ({ text: 'ok' }) };",
       `const out = (function () { return ${rm[2]}; }).call(world);`,
       'writeFileSync(process.argv[2], JSON.stringify({',
       '  isArray: Array.isArray(out),',
