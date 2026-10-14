@@ -320,21 +320,31 @@ const QQ_SEND_NEW = 'const p = resolveLocalImagePath(image, this.config.memoryDi
 const QQ_VIEW_OLD = "const p = isAbsolute(url) ? url : join(this.packageDir || '.', url);";
 const QQ_VIEW_NEW = 'const p = resolveLocalImagePath(url, this.config.memoryDir, this.packageDir);';
 
-/** 工具说明里那三处「相对扩展目录」要跟着改成「相对桌宠工作区」——模型只看得到说明。 */
+/**
+ * 工具说明里那三处要跟着改成「相对桌宠工作区」——模型只看得到说明。
+ * 上游爱改措辞（0.1.16 就把 image 那句换成了「如 /home/user/pics/a.png」），所以每条列出
+ * 见过的旧写法：一条都对不上只跳过、不判失败；整条补丁一句都认不出来才算版本变了。
+ */
 const QQ_HINTS = [
   {
-    from: "description: '本地文件路径（绝对路径，或相对扩展目录）或 http(s) 链接。'",
+    from: [
+      "description: '本地文件路径（绝对路径，或相对扩展目录）或 http(s) 链接。'",
+      "description: '本地文件路径（如 /home/user/pics/a.png）或 http(s) 链接。'",
+    ],
     to: "description: '本地文件路径（绝对路径，或相对桌宠工作区的路径，如 blobs/xx.jpg）或 http(s) 链接。'",
   },
   {
-    from: '或本地文件路径；给了就不再翻缓冲。',
+    from: ['或本地文件路径；给了就不再翻缓冲。'],
     to: '或本地文件路径（绝对路径，或相对桌宠工作区的路径，如 blobs/xx.jpg）；给了就不再翻缓冲。',
   },
   {
-    from: '给某个会话发一张图。`image` 给本地文件路径或 http(s) 链接（本机下载后再发），二者挑一个。',
+    from: ['给某个会话发一张图。`image` 给本地文件路径或 http(s) 链接（本机下载后再发），二者挑一个。'],
     to: '给某个会话发一张图。`image` 给本地文件路径（绝对路径，或相对桌宠工作区的路径，如 blobs/xx.jpg）或 http(s) 链接（本机下载后再发），二者挑一个。',
   },
 ];
+
+/** 这条说明还没改成我们的说法、而且上游还有它认得的旧写法 → 需要动手。 */
+const hintNeedsWork = (text, h) => !text.includes(h.to) && [].concat(h.from).some((from) => text.includes(from));
 
 /**
  * 每个补丁：`file` 是绝对路径，`done` 说这段原文是不是已经改过了，
@@ -467,14 +477,26 @@ export function rulesFor(id) {
       };
     case 'qq-image-hints':
       return {
-        done: (text) => QQ_HINTS.every((h) => text.includes(h.to)),
+        // 已经有一处是我们的说法，且没有哪处还留着认得的旧写法 → 不用再管（上游换掉的措辞不再拖住这条）。
+        done: (text) => QQ_HINTS.some((h) => text.includes(h.to)) && QQ_HINTS.every((h) => !hintNeedsWork(text, h)),
         apply: (text) => {
           let work = text;
+          let recognized = 0;
           for (const h of QQ_HINTS) {
-            const out = swap(work, h.from, h.to);
-            if (out === null) return { error: `工具说明对不上：${h.from.slice(0, 40)}` };
-            work = out;
+            if (work.includes(h.to)) {
+              recognized += 1;
+              continue;
+            }
+            for (const from of [].concat(h.from)) {
+              const out = swap(work, from, h.to);
+              if (out !== null) {
+                work = out;
+                recognized += 1;
+                break;
+              }
+            }
           }
+          if (recognized === 0) return { error: `工具说明已大改，一句都认不出来：${[].concat(QQ_HINTS[0].from)[0].slice(0, 40)}` };
           return { text: work };
         },
       };

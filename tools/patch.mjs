@@ -142,7 +142,7 @@ const QQ_FIXTURE_TS = [
   'export const qqSendImage = {',
   "  name: 'qq_send_image',",
   "  description: '给某个会话发一张图。`image` 给本地文件路径或 http(s) 链接（本机下载后再发），二者挑一个。',",
-  "  parameters: [{ name: 'image', description: '本地文件路径（绝对路径，或相对扩展目录）或 http(s) 链接。' }],",
+  "  parameters: [{ name: 'image', description: '本地文件路径（如 /home/user/pics/a.png）或 http(s) 链接。' }],",
   '};',
   'export class QQWorld implements World {',
   "  private packageDir = '.';",

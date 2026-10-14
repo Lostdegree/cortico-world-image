@@ -746,6 +746,28 @@ try {
   check(qqRules.done(qqPatched?.text ?? ''), '改完认成「已打过」（幂等）');
   check(qqPatched.text.includes("import { existsSync } from 'node:fs';"), '导入本来就够时不多改一行');
 
+  // 上游爱改工具说明的措辞（0.1.16 就把 image 那句换成了「如 /home/user/pics/a.png」）：
+  // 一条对不上不该让整条补丁失败；但一句都认不出来仍然要报。
+  const hintRules = patchMod.rulesFor('qq-image-hints');
+  check(typeof hintRules?.done === 'function' && typeof hintRules?.apply === 'function', 'QQ 说明补丁有 done/apply');
+  const hintFixture = [
+    "  parameters: [{ name: 'url', description: '可选：直接给图片链接（事件里带的图）或本地文件路径；给了就不再翻缓冲。' }],",
+    "  description: '给某个会话发一张图。`image` 给本地文件路径或 http(s) 链接（本机下载后再发），二者挑一个。',",
+    "  parameters: [{ name: 'image', description: '本地文件路径（如 /home/user/pics/a.png）或 http(s) 链接。' }],",
+    '',
+  ].join('\n');
+  check(!hintRules.done(hintFixture), '夹具还是「只认绝对路径」的说明（有东西可改）');
+  const hinted = hintRules.apply(hintFixture);
+  check(!hinted?.error, '上游换了说明措辞也照改，不报失败', String(hinted?.error ?? 'ok'));
+  check((hinted?.text ?? '').includes('或本地文件路径（绝对路径，或相对桌宠工作区的路径，如 blobs/xx.jpg）；给了就不再翻缓冲。'), '认得出的那两处照改');
+  check(!(hinted?.text ?? '').includes('相对扩展目录'), '旧说法不再残留在说明里');
+  check(hintRules.done(hinted?.text ?? ''), '改完认成「已打过」（幂等）');
+  const reworded = hintFixture.replace("'本地文件路径（如 /home/user/pics/a.png）或 http(s) 链接。'", "'图片本地路径或链接。'");
+  const rewordedOut = hintRules.apply(reworded);
+  check(!rewordedOut?.error && hintRules.done(rewordedOut?.text ?? ''), '上游整句换掉时跳过那一处，不算失败也不算没打', String(rewordedOut?.error ?? 'ok'));
+  check(Boolean(hintRules.apply('export const nope = 1;\n')?.error), '一句都认不出来时仍然报失败');
+  check(!hintRules.done('export const nope = 1;\n'), '文件整个换了写法时不谎报「已打过」');
+
   // pet_show_image 也要能认相对路径（按桌宠工作区解析）。
   const petSpecs = specs.filter((s) => s.id.startsWith('pet-workspace-'));
   check(petSpecs.length === 3 && petSpecs.every((s) => s.optional !== true), '桌宠工作区相对路径那 3 处是必备补丁', JSON.stringify(petSpecs.map((s) => s.id)));
