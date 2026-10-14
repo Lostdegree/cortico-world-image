@@ -175,17 +175,23 @@ async function materialize(json, { timeoutMs, format }) {
   throw new ImageApiError('接口返回里既没有 base64 也没有图片地址');
 }
 
+/** 画图请求体：`n` 固定 1，size / quality 是 auto 就不发。 */
+function generationBody(opts) {
+  const body = { model: opts.model, prompt: opts.prompt, n: 1 };
+  const size = String(opts.size ?? '').trim();
+  if (size && size.toLowerCase() !== 'auto') body.size = size;
+  const quality = String(opts.quality ?? '').trim();
+  if (quality && quality.toLowerCase() !== 'auto') body.quality = quality;
+  return body;
+}
+
 /**
  * 文生图。`extraBody` 会并进请求体，留给各家的私有参数。
  * @returns {Promise<{bytes: Buffer, mime: string, revisedPrompt: string|null}>}
  */
 export async function generateImage(opts = {}) {
   const timeoutMs = Number(opts.timeoutMs) > 0 ? Number(opts.timeoutMs) : DEFAULT_TIMEOUT;
-  const body = { model: opts.model, prompt: opts.prompt, n: 1 };
-  const size = String(opts.size ?? '').trim();
-  if (size && size.toLowerCase() !== 'auto') body.size = size;
-  const quality = String(opts.quality ?? '').trim();
-  if (quality && quality.toLowerCase() !== 'auto') body.quality = quality;
+  const body = generationBody(opts);
   if (opts.extraBody && typeof opts.extraBody === 'object') Object.assign(body, opts.extraBody);
   const json = await postJson(joinUrl(opts.baseUrl, 'images/generations'), {
     apiKey: opts.apiKey,
@@ -195,8 +201,30 @@ export async function generateImage(opts = {}) {
   return await materialize(json, { timeoutMs, format: opts.format });
 }
 
+/** 把本地图片编成 data URI；阿里云百炼那类兼容端点的 `image` 字段认这个。 */
+function dataUri(bytes, mime) {
+  const type = String(mime ?? '').trim() || 'image/png';
+  return `data:${type};base64,${Buffer.from(bytes ?? []).toString('base64')}`;
+}
+
 /**
- * 图生图 / 改图；走 `/images/edits` 的 multipart 形态，不是每个中转都支持。
+ * 端点没有 `/images/edits` 时的退路：把原图编成 data URI，跟着 prompt 一起
+ * 发给 `/images/generations` 的扩展字段 `image`（阿里云百炼的兼容模式就这么改图）。
+ */
+async function editViaGenerations(opts, timeoutMs) {
+  const body = generationBody(opts);
+  body.image = dataUri(opts.image, opts.mime);
+  const json = await postJson(joinUrl(opts.baseUrl, 'images/generations'), {
+    apiKey: opts.apiKey,
+    body,
+    timeoutMs,
+  });
+  return await materialize(json, { timeoutMs, format: opts.format });
+}
+
+/**
+ * 图生图 / 改图。先走 `/images/edits` 的 multipart；端点没这条路由（404/405）时
+ * 退回 `/images/generations` 的 `image` 扩展字段，见 `editViaGenerations`。
  * @returns {Promise<{bytes: Buffer, mime: string, revisedPrompt: string|null}>}
  */
 export async function editImage(opts = {}) {
@@ -210,6 +238,18 @@ export async function editImage(opts = {}) {
   const quality = String(opts.quality ?? '').trim();
   if (quality && quality.toLowerCase() !== 'auto') form.set('quality', quality);
   form.set('image', new Blob([opts.image], { type: opts.mime ?? 'image/png' }), opts.name ?? 'image.png');
-  const json = await postForm(joinUrl(opts.baseUrl, 'images/edits'), { apiKey: opts.apiKey, form, timeoutMs });
-  return await materialize(json, { timeoutMs, format: opts.format });
+  try {
+    const json = await postForm(joinUrl(opts.baseUrl, 'images/edits'), { apiKey: opts.apiKey, form, timeoutMs });
+    return await materialize(json, { timeoutMs, format: opts.format });
+  } catch (err) {
+    if (!(err instanceof ImageApiError) || (err.status !== 404 && err.status !== 405)) throw err;
+    try {
+      return await editViaGenerations(opts, timeoutMs);
+    } catch (again) {
+      if (again instanceof ImageApiError) {
+        again.message = `${again.message}（端点也不支持 multipart /images/edits：HTTP ${err.status}）`;
+      }
+      throw again;
+    }
+  }
 }

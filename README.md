@@ -21,7 +21,7 @@
 | 工具 | 标签 | 作用 |
 | --- | --- | --- |
 | `image_draw` | `act` | 按文字描述画一张新图，落盘、记进索引 |
-| `image_edit` | `act` | 拿一张已有的图按指令改（需要端点支持上传改图） |
+| `image_edit` | `act` | 拿一张已有的图按指令改（支持上传改图，或阿里云百炼式的 `image` 扩展字段） |
 | `image_gallery` | `read` | 列出画过的图，带编号与绝对路径 |
 | `image_show` | `speak` | 把一张旧图重新放回对话与作品页 |
 
@@ -320,7 +320,10 @@ pnpm add "D:\path\to\cortico-world-image" --ignore-workspace
 只要能对上这两条 OpenAI 形状的路：
 
 - `POST <baseUrl>/images/generations`（JSON，`{model, prompt, size, quality, n}`）
-- `POST <baseUrl>/images/edits`（multipart，`image` 文件 + `prompt`）——只有 `image_edit` 要它
+- `POST <baseUrl>/images/edits`（multipart，`image` 文件 + `prompt`）——只有 `image_edit` 要它。
+  端点没有这条路由（回 404/405）时，`image_edit` 会自动退回 `/images/generations`，把原图编成
+  `data:` URI 放进扩展字段 `image`——阿里云百炼的 OpenAI 兼容模式就是这么改图的，配上
+  `baseUrl` 和模型（如 `qwen-image-3.0-pro`）即可，不用额外设置。
 
 响应里认这些形状：`{data:[{b64_json|url}]}`、`{images:[...]}`、`{output|artifacts|content:[...]}`，
 以及顶层的 `{image|url|b64_json|image_url}`。base64 直接落盘，`http(s)` 链接会再下载一次。
@@ -330,6 +333,7 @@ pnpm add "D:\path\to\cortico-world-image" --ignore-workspace
 - 硅基流动：`https://api.siliconflow.cn/v1`
 - 智谱：`https://open.bigmodel.cn/api/paas/v4`
 - 火山方舟：`https://ark.cn-beijing.volces.com/api/v3`
+- 阿里云百炼：`https://dashscope.aliyuncs.com/compatible-mode/v1`（图生图走 `/images/generations` 的 `image` 字段）
 
 ## 自检（不联网）
 
@@ -422,7 +426,9 @@ cortico-world-image/
 - `pet_show_image` 的相对路径按桌宠工作区解析（`pet-workspace-*` 那三处补丁）；万一装配层那处
   （`pet-workspace-wire`）没打上、世界里没拿到 `workspaceDir`，行为退回老样子：相对路径报错、
   要求给绝对路径——不会静默拼出一个错的路径。
-- `image_edit` 要求端点真的支持 `/images/edits`；不支持的端点会回一条带 HTTP 码的错误，不是静默失败。
+- `image_edit` 先走 `/images/edits`（multipart 上传）；端点没这条路由（404/405）时自动退回
+  `/images/generations` 的 `image` 扩展字段（data URI，阿里云百炼那类）。两条路都不通时会回一条
+  带 HTTP 码的错误，不是静默失败。
 - 只有 Windows 上的「打开文件夹」会真的弹资源管理器；其他平台返回一句说明。
 - 画图本身要联网，只有自检样图是纯本地的。
 

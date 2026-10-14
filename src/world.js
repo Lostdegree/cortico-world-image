@@ -270,7 +270,7 @@ export class ImageWorld {
         name: 'image_edit',
         description: 'Redraw an existing local picture with the image API, following a text instruction. '
           + '`image` takes an absolute file path, or a picture id from image_gallery. '
-          + 'Needs an endpoint that supports /images/edits (multipart upload).',
+          + 'Works with endpoints that implement /images/edits (multipart upload) and with those that take a base64 `image` field on /images/generations instead (e.g. Aliyun Bailian).',
         tags: ['act'],
         parameters: {
           type: 'object',

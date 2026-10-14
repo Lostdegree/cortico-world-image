@@ -443,6 +443,99 @@ try {
   const showMissing = await tools.find((t) => t.name === 'image_show').handler({ id: 'deadbeef' });
   check(showMissing && showMissing.failed === true, 'image_show 找不到编号时失败');
 
+  section('改图请求的两种走法（stub fetch）');
+  const api = await import(pathToFileURL(join(pkgDir, 'src', 'api.js')).href);
+  const tinyPng = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4, 5, 6, 7, 8]);
+  const tinyB64 = tinyPng.toString('base64');
+  const jsonResponse = (obj, status = 200) => new Response(JSON.stringify(obj), {
+    status,
+    headers: { 'content-type': 'application/json' },
+  });
+  /** 按 path 后缀分发的 fetch 替身；返回记下每次调用的 calls 数组。 */
+  const stubFetch = (routes) => {
+    const calls = [];
+    globalThis.fetch = async (url, init = {}) => {
+      const call = { url: String(url), init };
+      calls.push(call);
+      const path = new URL(String(url)).pathname;
+      for (const [suffix, handler] of routes) {
+        if (path.endsWith(suffix)) return await handler(call);
+      }
+      return new Response('not found', { status: 404 });
+    };
+    return calls;
+  };
+  const realFetch = globalThis.fetch;
+  const editOpts = {
+    baseUrl: 'https://img.example.test/v1',
+    apiKey: 'sk-x',
+    model: 'gpt-image-1',
+    prompt: '把它改成水彩',
+    image: tinyPng,
+    mime: 'image/png',
+    name: 'src.png',
+  };
+  try {
+    // 1. 端点有 /images/edits：multipart 一次就够，不碰 generations。
+    let calls = stubFetch([['/images/edits', () => jsonResponse({ data: [{ b64_json: tinyB64 }] })]]);
+    let out = await api.editImage(editOpts);
+    check(calls.length === 1 && calls[0].url.endsWith('/images/edits'), '/images/edits 能走通时只发一次 multipart', calls.map((c) => c.url).join(' '));
+    check(calls[0].init.body instanceof FormData && calls[0].init.body.get('prompt') === '把它改成水彩', 'multipart 里带着 prompt');
+    check(out.bytes.equals(tinyPng) && out.mime === 'image/png', 'multipart 的图正常取回');
+
+    // 2. 端点没有 /images/edits（阿里云百炼：404）：退回 generations 的 image 字段。
+    calls = stubFetch([
+      ['/images/edits', () => jsonResponse({ error: { message: 'not found' } }, 404)],
+      ['/images/generations', () => jsonResponse({ data: [{ b64_json: tinyB64 }] })],
+    ]);
+    out = await api.editImage(editOpts);
+    check(calls.length === 2 && calls[1].url.endsWith('/images/generations'), '404 后退回 /images/generations', calls.map((c) => c.url).join(' '));
+    const fallbackBody = JSON.parse(String(calls[1].init.body));
+    check(fallbackBody.image === `data:image/png;base64,${tinyB64}`, '原图编成 data URI 塞进 image 字段', String(fallbackBody.image).slice(0, 40));
+    check(fallbackBody.prompt === '把它改成水彩' && fallbackBody.model === 'gpt-image-1' && fallbackBody.n === 1, '退路请求体带着 model / prompt / n');
+    check(calls[1].init.headers.Authorization === 'Bearer sk-x', '退路也带着密钥');
+    check(out.bytes.equals(tinyPng), '退路的图正常取回');
+
+    // 2b. 405（没有这条方法）同样算「没这条路由」。
+    calls = stubFetch([
+      ['/images/edits', () => jsonResponse({ error: { message: 'method not allowed' } }, 405)],
+      ['/images/generations', () => jsonResponse({ data: [{ b64_json: tinyB64 }] })],
+    ]);
+    out = await api.editImage(editOpts);
+    check(calls.length === 2 && out.bytes.equals(tinyPng), '405 也退回 /images/generations');
+
+    // 3. 端点报别的错（500）：不试退路，原样抛。
+    calls = stubFetch([['/images/edits', () => jsonResponse({ error: { message: 'boom' } }, 500)]]);
+    let caught = null;
+    try {
+      await api.editImage(editOpts);
+    } catch (err) {
+      caught = err;
+    }
+    check(caught instanceof api.ImageApiError && caught.status === 500, '500 不会被当成「没这条路由」', String(caught?.status));
+    check(calls.length === 1 && !calls.some((c) => c.url.endsWith('/images/generations')), '500 不触发退路');
+
+    // 4. 两条路都失败：错误里交代清楚先试了什么。
+    calls = stubFetch([
+      ['/images/edits', () => jsonResponse({ error: { message: 'not found' } }, 404)],
+      ['/images/generations', () => jsonResponse({ error: { message: 'model not exist' } }, 400)],
+    ]);
+    caught = null;
+    try {
+      await api.editImage(editOpts);
+    } catch (err) {
+      caught = err;
+    }
+    check(String(caught?.message).includes('model not exist') && String(caught?.message).includes('/images/edits'), '退路也失败时错误里带两条线索', String(caught?.message).slice(0, 120));
+
+    // 5. 画图那条路不带 image，别把文生图带歪。
+    calls = stubFetch([['/images/generations', () => jsonResponse({ data: [{ b64_json: tinyB64 }] })]]);
+    await api.generateImage({ ...editOpts, image: undefined });
+    check(!('image' in JSON.parse(String(calls[0].init.body))), 'image_draw 的请求体里没有 image 字段');
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+
   section('离线自检样图（落盘 → 索引 → 取图）');
   const self = await world.invoke('gallery', 'selftest', []);
   check(self?.ok === true && self.item?.id, 'selftest 返回条目');
