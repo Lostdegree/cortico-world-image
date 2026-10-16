@@ -8,7 +8,9 @@
  *   发布物里没有 `*.coopanion-orig` / `.chat-image-patch.json` / 本机路径、
  *   每个要发布的 `.js`/`.mjs` 过一遍 `node --check`。
  *
- * 宿主相关的三套测试只在找得到本机 Coopanion 安装时才跑：
+ * 宿主相关的三套测试只在找得到**契约版本对得上**的本机 Coopanion 安装时才跑（0.1 的安装没有
+ * `describe-export.ts`、契约号也更低：自动发现到这种旧安装时只提醒并跳过，不算失败；
+ * 显式 `--app`/`COOPANION_APP_ROOT` 指到不支持的宿主才算失败）：
  *   `tools/check.mjs`（离线，永远跑）、`tools/patch.mjs`（补丁自测）、
  *   `tools/drymount.mts`（用框架自己的判据真跑装配检查）、
  *   `tools/describe.mts --check`（核对 describe.json 与代码里的自描述一致）。
@@ -271,11 +273,35 @@ function runSuite(title, args, env) {
 
 runSuite('离线检查（tools/check.mjs）', [join('tools', 'check.mjs')]);
 
-const appRoot = opt('app') || process.env.COOPANION_APP_ROOT || (() => {
+const hostManifest = join('build', 'cortico', 'src', 'extensions', 'manifest.ts');
+const hostDescribe = join('build', 'cortico', 'src', 'extensions', 'describe-export.ts');
+
+/** 宿主 `manifest.ts` 里 `EXTENSION_API_VERSIONS.world` 声明的契约号；读不出来算 0。 */
+function hostDeclaredWorld(root) {
+  try {
+    const text = readFileSync(join(root, hostManifest), 'utf8');
+    const at = text.indexOf('EXTENSION_API_VERSIONS');
+    const m = at >= 0 ? /world:\s*(\d+)/.exec(text.slice(at, at + 400)) : null;
+    return m ? Number(m[1]) : 0;
+  } catch { return 0; }
+}
+
+/**
+ * 宿主能不能跑后面三项：既要有 0.2 才有的 `describe-export.ts`，
+ * 声明的 world 契约号也要和本包一致（0.1 的安装是 v5）。
+ */
+function hostUsable(root) {
+  if (!root || !existsSync(join(root, hostManifest)) || !existsSync(join(root, hostDescribe))) return false;
+  const want = Number(block.api ?? 0);
+  return !want || hostDeclaredWorld(root) === want;
+}
+
+const explicitApp = opt('app') || process.env.COOPANION_APP_ROOT || '';
+const appRoot = explicitApp || (() => {
   let dir = pkgDir;
   for (let i = 0; i < 8; i += 1) {
     const cand = join(dir, 'resources', 'app');
-    if (existsSync(join(cand, 'build', 'cortico', 'src', 'extensions', 'manifest.ts'))) return cand;
+    if (existsSync(join(cand, hostManifest))) return cand;
     const parent = dirname(dir);
     if (parent === dir) break;
     dir = parent;
@@ -283,11 +309,22 @@ const appRoot = opt('app') || process.env.COOPANION_APP_ROOT || (() => {
   return '';
 })();
 
+/** 为什么跳过宿主那三项；空串＝能跑。 */
+const skipReason = (() => {
+  if (!appRoot) return '没找到本机 Coopanion 安装（用 --app <安装>\\resources\\app 指一下）';
+  if (!hostUsable(appRoot)) {
+    return `宿主 ${appRoot} 只声明 world 契约 v${hostDeclaredWorld(appRoot) || '?'}，本包要 v${block.api}`
+      + '（0.1 的安装没有 describe-export.ts）：用 --app <安装>\\resources\\app 或环境变量 COOPANION_APP_ROOT 指到 0.2 的安装';
+  }
+  return '';
+})();
+
 if (flag('only-static')) {
   hint('--only-static：跳过补丁自测、dry-mount 与自描述核对');
-} else if (!appRoot || !existsSync(join(appRoot, 'build', 'cortico', 'src', 'extensions', 'manifest.ts'))) {
-  if (flag('quiet-host')) hint('没找到本机 Coopanion 安装：跳过补丁自测、dry-mount 与自描述核对');
-  else hint('没找到本机 Coopanion 安装（用 --app <安装>\\resources\\app 指一下）：跳过补丁自测、dry-mount 与自描述核对');
+} else if (skipReason) {
+  if (explicitApp) bad(skipReason);
+  else if (flag('quiet-host')) console.log(`宿主相关三项跳过：${skipReason}`);
+  else hint(`${skipReason}：跳过补丁自测、dry-mount 与自描述核对`);
 } else {
   console.log(`\n宿主：${appRoot}`);
   runSuite('补丁自测（tools/patch.mjs）', [join('tools', 'patch.mjs'), '--app', appRoot], { COOPANION_APP_ROOT: appRoot });

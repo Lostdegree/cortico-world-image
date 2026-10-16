@@ -124,6 +124,18 @@ node tools/prepublish.mjs --only-static         # 只做静态检查（CI / 没�
 退出码 `0` = 可以发；`1` = 有失败项，修完再来。`prepublishOnly` 也挂了同一个脚本，
 所以 `npm publish` 会先自动跑它——**它没过就不会发包**。
 
+自动找宿主时只认**契约版本对得上**的安装（`EXTENSION_API_VERSIONS.world` 与本包 `cortico.api` 一致、
+且装了 0.2 才有的 `build/cortico/src/extensions/describe-export.ts`）；从发布目录往上找到的如果是一份 0.1 的老安装
+（本机就有 `G:\coopanion\resources\app`，0.1.27），第 5 步那三项只给一条提醒并跳过，**不算失败**。
+`npm publish` 走的正是自动发现这条路，想让它跑全量判据就先指好宿主（npm 不会把 `--app` 传给 `prepublishOnly`）：
+
+```powershell
+$env:COOPANION_APP_ROOT = 'D:\Coopanion\resources\app'
+npm publish --registry https://registry.npmjs.org/
+```
+
+显式用 `--app`/`COOPANION_APP_ROOT` 指到不支持的宿主则算失败（那是配错了，不是环境缺东西）。
+
 再看一眼包内容（不会真的发）：
 
 ```powershell
