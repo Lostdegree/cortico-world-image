@@ -18,6 +18,7 @@ import { applyChatImagePatches, consolePort, patchBackupStatus, requestConsoleRe
 import { DEFAULTS, ID, configGroup, text } from './config.js';
 import { Gallery } from './gallery.js';
 import { samplePng } from './png.js';
+import { TOOL_SPECS } from './tools.js';
 
 /** 扩展包自带的模板；部署侧的覆盖文件由框架自己接在后面。 */
 const ENV_PROMPT_FILE = fileURLToPath(new URL('../ENV_PROMPT.md', import.meta.url));
@@ -235,85 +236,25 @@ export class ImageWorld {
   // -------------------------------------------------------------------------
 
   tools() {
-    return [
-      {
-        name: 'image_draw',
-        description: 'Draw a picture from a text description through the configured image API. '
-          + 'The picture is saved to disk, attached to this conversation so you can see it, and shown in the Image Studio console page. '
-          + 'The reply carries the absolute file path; hand that path to a channel tool such as qq_send_image to actually deliver the picture to someone.',
-        tags: ['act'],
-        parameters: {
-          type: 'object',
-          properties: {
-            prompt: {
-              type: 'string',
-              description: 'What to draw: subject, style, composition, lighting. Any language.',
-            },
-            note: {
-              type: 'string',
-              description: 'Short label for this picture in the studio list.',
-            },
-            size: {
-              type: 'string',
-              description: 'Override the configured size, e.g. 1024x1024 or 1024x1536.',
-            },
-            quality: {
-              type: 'string',
-              description: 'Override the configured quality, e.g. low / medium / high.',
-            },
-          },
-          required: ['prompt'],
-        },
-        handler: async (args) => this.#draw(args ?? {}),
-      },
-      {
-        name: 'image_edit',
-        description: 'Redraw an existing local picture with the image API, following a text instruction. '
-          + '`image` takes an absolute file path, or a picture id from image_gallery. '
-          + 'Works with endpoints that implement /images/edits (multipart upload) and with those that take a base64 `image` field on /images/generations instead (e.g. Aliyun Bailian).',
-        tags: ['act'],
-        parameters: {
-          type: 'object',
-          properties: {
-            prompt: { type: 'string', description: 'What to change or how to restyle it.' },
-            image: { type: 'string', description: 'Absolute path of the source picture, or a picture id from image_gallery.' },
-            note: { type: 'string', description: 'Short label for the result in the studio list.' },
-            size: { type: 'string', description: 'Override the configured size.' },
-            quality: { type: 'string', description: 'Override the configured quality.' },
-          },
-          required: ['prompt', 'image'],
-        },
-        handler: async (args) => this.#edit(args ?? {}),
-      },
-      {
-        name: 'image_gallery',
-        description: 'List pictures drawn so far, newest first, with their ids and absolute file paths. '
-          + 'Ids can be handed to image_show.',
-        tags: ['read'],
-        parameters: {
-          type: 'object',
-          properties: {
-            limit: { type: 'integer', description: 'How many to list, 1-50. Defaults to 12.' },
-          },
-          required: [],
-        },
-        handler: async (args) => this.#list(args ?? {}),
-      },
-      {
-        name: 'image_show',
-        description: 'Put an existing picture back in front of the user: it is re-attached to this conversation and highlighted in the Image Studio console page. '
-          + 'Use it to look at or talk about an older picture again.',
-        tags: ['speak'],
-        parameters: {
-          type: 'object',
-          properties: {
-            id: { type: 'string', description: 'Picture id from image_gallery, or its absolute path.' },
-          },
-          required: ['id'],
-        },
-        handler: async (args) => this.#show(args ?? {}),
-      },
-    ];
+    // 声明在 src/tools.js，definition 的 describe.tools 用的是同一份（框架 0.2 起必需）。
+    return TOOL_SPECS.map(({ name, description, parameters, tags }) => ({
+      name,
+      description,
+      parameters,
+      tags,
+      handler: async (args) => this.#runTool(name, args ?? {}),
+    }));
+  }
+
+  /** 按名字把 handler 接到各工具的实现上；名字表就是 TOOL_SPECS。 */
+  async #runTool(name, args) {
+    switch (name) {
+      case 'image_draw': return await this.#draw(args);
+      case 'image_edit': return await this.#edit(args);
+      case 'image_gallery': return await this.#list(args);
+      case 'image_show': return await this.#show(args);
+      default: throw new Error(`未知工具：${name}`);
+    }
   }
 
   async #draw(args) {
@@ -541,7 +482,7 @@ export class ImageWorld {
   // 控制台
   // -------------------------------------------------------------------------
 
-  console(language = 'zh') {
+  webUi(language = 'zh') {
     this.language = language === 'en' ? 'en' : 'zh';
     const t = this.#text();
     const env = this.#envState();

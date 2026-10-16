@@ -2,11 +2,11 @@
 
 给 Coopanion 桌宠加两件事：**调用图片生成 API 画图，并把图交回对话**；以及**把本地任意一张图贴进控制台的「对话」页**——后者靠一套自愈补丁给桌宠加一个 `pet_show_image` 工具，程序自动更新把这些文件覆写回原样之后，扩展下次启动会自己补回来。
 
-这是一个 `cortico` 的 **World 扩展**（`kind: world`，`api: 5`），只补一个 `image` 世界，
+这是一个 `cortico` 的 **World 扩展**（`kind: world`，`api: 6`），只补一个 `image` 世界，
 不依赖任何第三方 npm 包（纯 ESM JS + Node 内置模块）。
 
 > **性质说明**：这是给 Coopanion 写的**非官方**扩展，走的是框架公开的扩展接口
-> （`kind: world` + `consoleClient` 面板）。唯一伸手动别人的地方是「对话页发图」那一节的
+> （`kind: world` + `webUiClient` 面板 + 必需的 `describe.json` 自描述）。唯一伸手动别人的地方是「对话页发图」那一节的
 > 自愈补丁——它按锚点改写安装目录下的几个文件（`resources/app` 里的浏览器 bundle、桌宠包
 > 的 `src/*.ts`，以及可选的第三方 QQ 扩展），改之前一律留 `.coopanion-orig` 备份，
 > 程序自动更新覆写后会自己补回来，细节与还原方式都在那一节里。不愿意让脚本动这些文件，
@@ -178,10 +178,10 @@
 `ws://127.0.0.1:17788/ws/providers/world%3Adesktop-pet/panels/chat` 发 `{"t":"hello"}` 会收到
 `init`（历史 267 项），桌宠说话也会收到 `item {kind:'say',…}`。**Ctrl+F5 硬刷新一次**就恢复了。
 
-还有一条是我们这边造成的：扩展面板脚本由服务端按 `/assets/extensions/<包>/<版本>/console.js`
+还有一条是我们这边造成的：扩展面板脚本由服务端按 `/assets/extensions/<包>/<版本>/webui.js`
 分配，响应头是 `Cache-Control: public, max-age=31536000, immutable`，而 URL 里的版本号来自
 `package.json`。所以**改了面板 UI 却没抬版本号时，浏览器会一直用旧脚本**（看不到新按钮）。
-改了 `dist/console.js` 就顺手把 `version` 抬一格，或者让用户硬刷新。
+改了 `dist/webui.js` 就顺手把 `version` 抬一格，或者让用户硬刷新。
 
 **程序内那个控制台窗口更顽固**（Coopanion.exe 自己的窗口，不是外部浏览器）：它是长驻的 Chromium
 渲染进程，磁盘缓存在 `<安装>\data\Cache`，而 `immutable` 让它在新鲜期内**连重启都不回源**。
@@ -194,7 +194,7 @@
 
 1. 把 `package.json` 的 `version` 抬一格（例如 `0.1.3` → `0.1.4`）；
 2. 重启控制台（状态页「重启控制台」或 `node tools/patch.mjs --restart`）；
-3. 程序内窗口自动重载 → 新的 URL `/assets/extensions/cortico-world-image/0.1.4/console.js`
+3. 程序内窗口自动重载 → 新的 URL `/assets/extensions/cortico-world-image/0.2.0/webui.js`
    取到新脚本，旧 URL 立刻变 404。
 
 不想抬版本也行，但要**先完全退出程序**再删缓存目录：`<安装>\data\Cache`、
@@ -341,7 +341,7 @@ pnpm add "D:\path\to\cortico-world-image" --ignore-workspace
 走完「落盘 → 索引 → 面板取图 → 缩略图显示」整条路。看不到这张图，说明是扩展或面板的问题，
 不是图片接口的问题。
 
-开发侧一共有四份检查脚本，外加一份发布前自检。
+开发侧一共有五份检查脚本，外加一份发布前自检。
 
 不碰 DOM 的那份覆盖模块形状、dry-mount 那套判据、工具回执、索引与两个面板的挂载（自带假 DOM）：
 
@@ -361,6 +361,16 @@ node --experimental-transform-types tools/drymount.mts
 > 参数属性（报 `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX`），所以必须带
 > `--experimental-transform-types`（node 22.6+）。带上这个开关就不需要任何额外的 loader。
 
+框架 0.2 起每个扩展还要带一份**自描述**（`cortico.describe` → `describe.json`：工具表、事件表，
+以及环境提示词模板的原文）。这份脚本按同一套判据从定义重新生成一遍，跟包里那份逐字比对：
+
+```powershell
+node --experimental-transform-types tools/describe.mts          # 生成 / 刷新 describe.json
+node --experimental-transform-types tools/describe.mts --check  # 只核对，不写盘
+```
+
+改了工具描述、`describe.events` 或 `ENV_PROMPT.md` 之后要重新生成一次，否则发布前自检会拦下来。
+
 第三份会**真的联网画一张图**：拿部署里已有端点的密钥（只读那份 `.env`，不打印密钥），
 走完「工具回执带图 → 落盘 → 索引 → 面板取图 → 状态页读数」整条路，图存在临时目录里：
 
@@ -379,10 +389,11 @@ node tools/live.mjs                                       # 可加 LIVE_BASE_URL
 node tools/patch.mjs
 ```
 
-第五份是**发布前自检**：按宿主 `manifest.ts` 的同一套规则验 `package.json`（`type: module`、
-`cortico.api` 是否等于当前框架的 `world` 契约、`consoleClient` 是否真在包里、keywords 里有没有
+还有一份是**发布前自检**：按宿主 `manifest.ts` 的同一套规则验 `package.json`（`type: module`、
+`cortico.api` 是否等于当前框架的 `world` 契约、`webUiClient` 与 `describe` 是否真在包里、keywords 里有没有
 `cortico-world`）、按 `files` 展开一遍发布物、扫本机路径与私有端点之类的痕迹、逐个 `node --check`，
-然后自动跑上面的 `check.mjs`（找得到本机 Coopanion 安装时连 `patch.mjs` 自测与 `drymount.mts` 一起跑）。
+然后自动跑上面的 `check.mjs`（找得到本机 Coopanion 安装时连 `patch.mjs` 自测、`drymount.mts`
+与 `describe.mts --check` 一起跑）。
 
 ```powershell
 node tools/prepublish.mjs                              # 或 npm run selfcheck
@@ -396,7 +407,7 @@ node tools/prepublish.mjs --only-static                # 只做静态检查
 
 ```
 cortico-world-image/
-├─ package.json        # cortico: { kind: world, api: 5, consoleClient: dist/console.js }
+├─ package.json        # cortico: { kind: world, api: 6, webUiClient: dist/webui.js, describe: describe.json }
 ├─ README.md
 ├─ PUBLISH.md          # 发布流程（维护者用，不打进 npm 包）
 ├─ ENV_PROMPT.md       # 随环境提示词交给桌宠的说明（含 {{image.dir}} / {{image.ready}} 占位符）
@@ -409,9 +420,11 @@ cortico-world-image/
 │  ├─ api.js           # OpenAI 兼容客户端的取图/落盘/错误归一化
 │  ├─ gallery.js       # 作品仓库：目录 + index.json
 │  └─ png.js           # 零依赖 PNG 编码器 + 自检样图
-├─ dist/console.js     # 浏览器侧面板 bundle（export default { panels })
+├─ describe.json       # 自描述（框架 0.2 起必需）：工具表、事件表、环境提示词原文
+├─ dist/webui.js       # 浏览器侧面板 bundle（export default { panels })
 └─ tools/
    ├─ check.mjs        # 离线检查（自带假 DOM）
+   ├─ describe.mts     # 生成 / 核对 describe.json（--check 只核对）
    ├─ drymount.mts     # 用框架自带判据跑 dry-mount
    ├─ live.mjs         # 联网真画一张（自测整条链路）
    ├─ patch.mjs        # 对话页发图补丁：自测 / --apply / --backups / --restore / --restart
@@ -437,7 +450,7 @@ cortico-world-image/
 这个仓库同时就是 npm 包 `cortico-world-image` 的源码。发一版的流程：
 
 1. 改完代码、跑完自检（`node tools/prepublish.mjs --app <安装目录>\resources\app` 全绿）；
-2. 抬 `package.json` 的 `version`（改了 `dist/console.js` 必须抬，否则浏览器缓存旧脚本）；
+2. 抬 `package.json` 的 `version`（改了 `dist/webui.js` 必须抬，否则浏览器缓存旧脚本）；
 3. 把本仓库整份同步到发布目录（一份纯产物副本，`npm publish` 的根）；
 4. 提交并推进 GitHub；
 5. 在发布目录里 `npm publish --registry https://registry.npmjs.org/`。

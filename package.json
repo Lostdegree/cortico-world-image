@@ -1,6 +1,6 @@
 {
   "name": "cortico-world-image",
-  "version": "0.1.4",
+  "version": "0.2.0",
   "type": "module",
   "description": "Image Studio（图片工坊）—— 给 Coopanion 桌宠的 cortico World 扩展：用任意 OpenAI 兼容的图片接口画图/改图、落盘成作品库、把图贴进控制台「对话」页，并自带一套自动重打的自愈补丁。 / A cortico World extension that draws through any OpenAI-compatible image API, keeps pictures on disk and shows them in the console.",
   "license": "MIT",
@@ -34,6 +34,7 @@
     "src",
     "dist",
     "tools",
+    "describe.json",
     "ENV_PROMPT.md",
     "README.md"
   ],
@@ -46,8 +47,9 @@
   },
   "cortico": {
     "kind": "world",
-    "api": 5,
+    "api": 6,
     "displayName": "图片工坊",
-    "consoleClient": "dist/console.js"
+    "webUiClient": "dist/webui.js",
+    "describe": "describe.json"
   }
 }

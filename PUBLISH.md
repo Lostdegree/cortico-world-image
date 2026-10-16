@@ -113,12 +113,13 @@ node tools/prepublish.mjs --only-static         # 只做静态检查（CI / 没�
 它会：
 
 1. 按宿主 `src/extensions/manifest.ts` 的同一套规则验 `package.json`：
-   `type: module`、`cortico.kind`/`cortico.api`（`world` 这一类当前是 **api 5**，旧了或新了宿主都拒收）、
-   `consoleClient` 是包内相对路径且文件真在、`keywords` 里有 `cortico-world`（否则控制台搜不到这个包）。
-2. 按 `files` 展开一遍发布物，确认入口（`main`/`exports`）和控制台面板都真的在里面。
+   `type: module`、`cortico.kind`/`cortico.api`（`world` 这一类当前是 **api 6**，旧了或新了宿主都拒收）、
+   `webUiClient` 是包内相对路径且文件真在、`describe` 指向包内 `describe.json` 且是合法 JSON、
+   `keywords` 里有 `cortico-world`（否则控制台搜不到这个包）。
+2. 按 `files` 展开一遍发布物，确认入口（`main`/`exports`）、面板产物与自描述都真的在里面。
 3. 扫隐私：本机绝对路径、私有端点、私有密钥变量名、`.coopanion-orig`、`.chat-image-patch.json` 之类。
 4. 每个 `.js`/`.mjs` 过一遍 `node --check`。
-5. 跑离线检查 `tools/check.mjs`；找得到 Coopanion 安装时再跑 `tools/patch.mjs` 自测与 `tools/drymount.mts`（用框架自己的判据真跑装配）。
+5. 跑离线检查 `tools/check.mjs`；找得到 Coopanion 安装时再跑 `tools/patch.mjs` 自测、`tools/drymount.mts`（用框架自己的判据真跑装配）与 `tools/describe.mts --check`（自描述与代码是否一致）。
 
 退出码 `0` = 可以发；`1` = 有失败项，修完再来。`prepublishOnly` 也挂了同一个脚本，
 所以 `npm publish` 会先自动跑它——**它没过就不会发包**。
@@ -131,9 +132,9 @@ npm pack --dry-run
 
 要看的点：
 
-* 文件数/体积合理（`dist/console.js` 是浏览器面板，几百 KB 以内）。
+* 文件数/体积合理（`dist/webui.js` 是浏览器面板，几百 KB 以内）。
 * **没有** `.chat-image-patch.json`、`*.coopanion-orig`、`.npm-cache`、`tools/_probe-*.mjs` 这类东西。
-* `README.md`、`LICENSE`、`src/`、`dist/`、`tools/`、`ENV_PROMPT.md` 都在。
+* `README.md`、`LICENSE`、`src/`、`dist/`、`tools/`、`ENV_PROMPT.md`、`describe.json` 都在。
 
 离线只想跑脚本、不想打 tarball 的话：`npm run selfcheck`。
 
@@ -145,11 +146,11 @@ npm pack --dry-run
 # package.json 里的 version 三处（本仓库、发布目录同步出来的那份）必须同一个值
 ```
 
-* 口径：修 bug / 改文案 = patch（`0.1.2` → `0.1.3`）；加配置项、加工具、加补丁 = minor。
+* 口径：修 bug / 改文案 = patch（`0.2.0` → `0.2.1`）；加配置项、加工具、加补丁 = minor。
 * **同一个版本号不能发第二次**（`E403`/`E409`：`cannot publish over previously published version`）。
-  发错了只能换号，或者 24 小时内 `npm unpublish cortico-world-image@0.1.3`（见 §9）。
-* 控制台的资源 URL 里带版本（`/assets/extensions/cortico-world-image/<版本>/console.js`），
-  所以**改控制台面板（`dist/console.js`）必须抬版本**，不然用户浏览器可能还拿着旧脚本。
+  发错了只能换号，或者 24 小时内 `npm unpublish cortico-world-image@0.2.0`（见 §9）。
+* 控制台的资源 URL 里带版本（`/assets/extensions/cortico-world-image/<版本>/webui.js`），
+  所以**改控制台面板（`dist/webui.js`）必须抬版本**，不然用户浏览器可能还拿着旧脚本。
 
 ---
 
@@ -183,8 +184,8 @@ npm publish --registry https://registry.npmjs.org/
 
 ```powershell
 git add -A
-git commit -m "release: v0.1.3"
-git tag v0.1.3
+git commit -m "release: v0.2.0"
+git tag v0.2.0
 git push origin HEAD --tags
 ```
 
@@ -206,7 +207,7 @@ git push origin HEAD --tags
 
 ```powershell
 Set-Location 'D:\Coopanion\data\extensions'
-pnpm add cortico-world-image --ignore-workspace      # 或 cortico-world-image@0.1.3 钉住版本
+pnpm add cortico-world-image --ignore-workspace      # 或 cortico-world-image@0.2.0 钉住版本
 Set-Location 'D:\Coopanion'
 .\Coopanion.exe                                      # 重启生效
 ```
@@ -219,7 +220,7 @@ Set-Location 'D:\Coopanion'
 ### 8.4 回退
 
 ```powershell
-pnpm add cortico-world-image@0.1.2 --ignore-workspace   # 装回旧版
+pnpm add cortico-world-image@0.1.4 --ignore-workspace   # 装回旧版
 ```
 
 ### 8.5 本地开发（不走 npm）
@@ -236,8 +237,8 @@ pnpm add "D:\path\to\cortico-world-image" --ignore-workspace
 ## 9. 撤回
 
 ```powershell
-npm deprecate cortico-world-image@0.1.3 "这个版本有 bug，请用 0.1.4"   # 推荐：留版本、给提示
-npm unpublish cortico-world-image@0.1.3 --force                        # 24 小时内、且没别的包依赖它
+npm deprecate cortico-world-image@0.2.0 "这个版本有 bug，请用 0.2.1"   # 推荐：留版本、给提示
+npm unpublish cortico-world-image@0.2.0 --force                        # 24 小时内、且没别的包依赖它
 ```
 
 `unpublish` 会把版本号**永久占用**（不能再发同一个号），而且已经装了这版的用户不会自动退回，
@@ -256,16 +257,17 @@ npm unpublish cortico-world-image@0.1.3 --force                        # 24 小�
 | `E404 Not Found` on publish | registry 指错了（镜像/私有源） | `--registry https://registry.npmjs.org/` |
 | `EPERM ... npm-cache` | 默认缓存目录不可写 | `$env:npm_config_cache = "$PWD\.npm-cache"`（§2.4） |
 | 发布成功但控制台搜不到 | keywords 少了 `cortico-world`，或 registry 缓存 | 看 `prepublish.mjs` 的关键词检查；等一两分钟重搜 |
-| 控制台装上了但扩展没加载 | `cortico.api` 与当前框架不匹配，或没重启 | 看控制台「扩展」页的 problems；重启进程 |
+| 控制台装上了但扩展没加载 | `cortico.api` 与当前框架不匹配、`describe` 缺失，或没重启 | 看控制台「扩展」页的 problems；重启进程 |
 | 面板能开但样式/脚本是旧的 | 面板资源 URL 带版本，旧脚本被浏览器缓存 | 抬版本重发（§5） |
 
 ---
 
 ## 11. 发布检查清单
 
-- [ ] 开发副本的测试全过（`node tools/check.mjs`、`node tools/patch.mjs --app ...`、`node --experimental-transform-types tools/drymount.mts`）
+- [ ] 开发副本的测试全过（`node tools/check.mjs`、`node tools/patch.mjs --app ...`、`node --experimental-transform-types tools/drymount.mts`、`node --experimental-transform-types tools/describe.mts --check`）
 - [ ] 隐私内容已清（本机路径、私有端点、密钥变量名、用户名）
-- [ ] `package.json`：`version` 已抬、`cortico.api` 与当前框架匹配、`files` 覆盖到 `src`/`dist`/`tools`/`README.md`
+- [ ] `cortico.describe` 指向的 `describe.json` 已重新生成（改了工具描述 / `describe.events` / `ENV_PROMPT.md` 之后）
+- [ ] `package.json`：`version` 已抬、`cortico.api` 与当前框架匹配、`files` 覆盖到 `src`/`dist`/`tools`/`README.md`/`describe.json`
 - [ ] README 里的版本示例、补丁处数、目录结构与代码一致
 - [ ] 本仓库 → 发布目录已 /MIR 同步，哈希核对无 `DIFF`/`MISSING`
 - [ ] `node tools/prepublish.mjs --app ...` 全绿

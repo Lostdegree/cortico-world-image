@@ -100,7 +100,7 @@ try {
   console.log('用框架自带的判据检查');
   console.log(`  包目录：${pkgDir}`);
   console.log(`  世界：${def?.id} / ${def?.label}`);
-  console.log(`  manifest：kind=${manifest.cortico?.kind} api=${manifest.cortico?.api} consoleClient=${manifest.cortico?.consoleClient ?? '(无)'}`);
+  console.log(`  manifest：kind=${manifest.cortico?.kind} api=${manifest.cortico?.api} webUiClient=${manifest.cortico?.webUiClient ?? '(无)'} describe=${manifest.cortico?.describe ?? '(无)'}`);
 
   const parsed = parseExtensionManifest(manifest);
   if (!parsed.ok) {
@@ -116,10 +116,18 @@ try {
   }
   for (const warning of parsed.warnings ?? []) hint(warning);
 
-  const clientFile = manifest.cortico?.consoleClient;
-  const hasConsoleClient = typeof clientFile === 'string' && clientFile.length > 0;
-  if (hasConsoleClient && !existsSync(join(pkgDir, clientFile))) bad(`manifest 声明的 ${clientFile} 不在包里`);
-  else if (hasConsoleClient) ok(`manifest 声明的 ${clientFile} 在包里`);
+  const clientFile = manifest.cortico?.webUiClient;
+  const hasWebUiClient = typeof clientFile === 'string' && clientFile.length > 0;
+  if (hasWebUiClient && !existsSync(join(pkgDir, clientFile))) bad(`manifest 声明的 ${clientFile} 不在包里`);
+  else if (hasWebUiClient) ok(`manifest 声明的 ${clientFile} 在包里`);
+
+  const describeFile = manifest.cortico?.describe;
+  if (typeof describeFile === 'string' && describeFile.length > 0) {
+    if (existsSync(join(pkgDir, describeFile))) ok(`manifest 声明的 ${describeFile} 在包里`);
+    else bad(`manifest 声明的 ${describeFile} 不在包里`);
+  } else {
+    bad('manifest 没有声明 describe（0.2 起自描述是必需的）');
+  }
 
   const { taken, skipped } = collectToolNames([def], { scratchDir, packageDir: pkgDir });
   for (const extra of skipped) bad(`收集工具名时构造失败 ${extra}`);
@@ -128,7 +136,7 @@ try {
   if (conflicts.size === 0) ok(`其它已装扩展里没有同名工具（扫了 ${extensionsDir}）`);
   else for (const [name, owner] of conflicts) bad(`工具名「${name}」已被 ${owner} 占用`);
 
-  const report = await dryMountWorld(def, { scratchDir, packageDir: pkgDir, hasConsoleClient, takenToolNames: conflicts });
+  const report = await dryMountWorld(def, { scratchDir, packageDir: pkgDir, hasWebUiClient, takenToolNames: conflicts });
   for (const line of report.ok) ok(line);
   for (const line of report.warnings) hint(line);
   for (const line of report.failures) bad(line);

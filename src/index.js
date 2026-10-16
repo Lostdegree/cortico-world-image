@@ -1,6 +1,6 @@
 /**
  * 扩展入口：默认导出必须是 WorldDefinition。
- * `cortico.<kind> = world`、`api = 5` 与 `keywords` 里的 `cortico-world` 见 package.json。
+ * `cortico.<kind> = world`、`api = 6` 与 `keywords` 里的 `cortico-world` 见 package.json。
  */
 import definition, { imageDefinition } from './definition.js';
 

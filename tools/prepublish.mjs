@@ -4,13 +4,14 @@
  * 静态部分（不联网、不需要 npm 账号、不需要装 Coopanion）：
  *   package.json 必填字段、npm 包名与版本号、`type: module`、
  *   `cortico` 声明按宿主 `src/extensions/manifest.ts` 的规则复刻校验、
- *   关键词、入口文件存在、`files` 覆盖到入口与控制台面板、
+ *   关键词、入口文件存在、`files` 覆盖到入口与面板产物、`cortico.describe` 指向的自描述在包里且是合法 JSON、
  *   发布物里没有 `*.coopanion-orig` / `.chat-image-patch.json` / 本机路径、
  *   每个要发布的 `.js`/`.mjs` 过一遍 `node --check`。
  *
  * 宿主相关的三套测试只在找得到本机 Coopanion 安装时才跑：
  *   `tools/check.mjs`（离线，永远跑）、`tools/patch.mjs`（补丁自测）、
- *   `tools/drymount.mts`（用框架自己的判据真跑装配检查）。
+ *   `tools/drymount.mts`（用框架自己的判据真跑装配检查）、
+ *   `tools/describe.mts --check`（核对 describe.json 与代码里的自描述一致）。
  *
  * 跑法：
  *   node tools/prepublish.mjs                                     # 自动找宿主
@@ -44,8 +45,10 @@ const section = (title) => console.log(`\n${title}`);
 const PACKAGE_NAME = /^(?:@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*$/;
 const SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 const EXTENSION_KINDS = ['world', 'provider', 'bot'];
-const EXTENSION_API = { world: 5, provider: 5, bot: 6 };
+const EXTENSION_API = { world: 6, provider: 6, bot: 7 };
 const EXTENSION_KEYWORDS = { world: 'cortico-world', provider: 'cortico-provider', bot: 'cortico-bot' };
+/** 与宿主 `describe-export.ts` 的 `DEFAULT_DESCRIBE_FILE` 一致。 */
+const DEFAULT_DESCRIBE_FILE = 'describe.json';
 const ICON_TYPES = ['.png', '.webp', '.svg'];
 
 /** 包内相对路径：只用 `/`，不认盘符、`\`、`..`、空段。 */
@@ -148,19 +151,38 @@ if (!block || typeof block !== 'object' || Array.isArray(block)) {
   } else if (kindOk) {
     ok(`keywords 含 "${EXTENSION_KEYWORDS[kind]}"`);
   }
-  const client = block.consoleClient;
+  const client = block.webUiClient;
+  /* 0.2 之前的键名：框架只认新名，旧键留着等于没声明。 */
+  for (const [legacy, now] of [['consoleClient', 'webUiClient'], ['consoleStyle', 'webUiStyle']]) {
+    if (block[legacy] !== undefined) bad(`cortico.${legacy} 是 0.1 的旧键名，框架 0.2 只认 cortico.${now}：改个名`);
+  }
   if (client !== undefined) {
-    if (!safeRelativeFile(client)) bad(`consoleClient 必须是包内相对路径（只用 /）：${JSON.stringify(client)}`);
-    else if (!/\.m?js$/.test(client)) bad(`consoleClient 必须是 .js / .mjs：${client}`);
-    else if (!existsSync(join(pkgDir, client))) bad(`consoleClient 指向的 ${client} 不在包里`);
-    else ok(`consoleClient＝${client} 在包里`);
-  } else hint('没有 consoleClient：这个扩展不会有控制台面板');
-  const style = block.consoleStyle;
+    if (!safeRelativeFile(client)) bad(`webUiClient 必须是包内相对路径（只用 /）：${JSON.stringify(client)}`);
+    else if (!/\.m?js$/.test(client)) bad(`webUiClient 必须是 .js / .mjs：${client}`);
+    else if (!existsSync(join(pkgDir, client))) bad(`webUiClient 指向的 ${client} 不在包里`);
+    else ok(`webUiClient＝${client} 在包里`);
+  } else hint('没有 webUiClient：这个扩展不会有 WebUI 面板');
+  const style = block.webUiStyle;
   if (style !== undefined) {
-    if (client === undefined) bad('有 consoleStyle 却没有 consoleClient：宿主会报错');
-    else if (!safeRelativeFile(style) || !/\.css$/.test(style)) bad(`consoleStyle 必须是包内相对 .css：${JSON.stringify(style)}`);
-    else if (!existsSync(join(pkgDir, style))) bad(`consoleStyle 指向的 ${style} 不在包里`);
-    else ok(`consoleStyle＝${style} 在包里`);
+    if (client === undefined) bad('有 webUiStyle 却没有 webUiClient：宿主会报错');
+    else if (!safeRelativeFile(style) || !/\.css$/.test(style)) bad(`webUiStyle 必须是包内相对 .css：${JSON.stringify(style)}`);
+    else if (!existsSync(join(pkgDir, style))) bad(`webUiStyle 指向的 ${style} 不在包里`);
+    else ok(`webUiStyle＝${style} 在包里`);
+  }
+  const describePath = block.describe;
+  if (describePath === undefined) {
+    bad(`没有 cortico.describe：0.2 起自描述是必需的，宿主 check:extension 会判失败（补一个 "${DEFAULT_DESCRIBE_FILE}"）`);
+  } else if (!safeRelativeFile(describePath) || !/\.json$/.test(describePath)) {
+    bad(`cortico.describe 必须是包内相对 .json：${JSON.stringify(describePath)}`);
+  } else if (!existsSync(join(pkgDir, describePath))) {
+    bad(`cortico.describe 指向的 ${describePath} 不在包里`);
+  } else {
+    try {
+      const describeFile = JSON.parse(readFileSync(join(pkgDir, describePath), 'utf8'));
+      ok(`describe＝${describePath} 在包里且是合法 JSON（${(describeFile.tools ?? []).length} 个工具 / ${(describeFile.events ?? []).length} 个事件）`);
+    } catch (error) {
+      bad(`cortico.describe 指向的 ${describePath} 不是合法 JSON：${error instanceof Error ? error.message : String(error)}`);
+    }
   }
   const icon = block.icon;
   if (icon !== undefined) {
@@ -192,12 +214,13 @@ ok(`会发布的文件 ${shipped.length} 个，展开后约 ${(totalBytes / 1024
 
 const mustShip = [...new Set([
   ...entryPoints.map(clean),
-  ...(pkg.cortico?.consoleClient ? [clean(pkg.cortico.consoleClient)] : []),
+  ...(pkg.cortico?.webUiClient ? [clean(pkg.cortico.webUiClient)] : []),
+  ...(pkg.cortico?.describe ? [clean(pkg.cortico.describe)] : []),
 ])];
 for (const need of mustShip) {
   if (!shippedRel.includes(need)) bad(`${need} 没有被 files 覆盖：发出去的包里会缺这个文件`);
 }
-if (!mustShip.some((need) => !shippedRel.includes(need))) ok('入口与控制台面板都在 files 里');
+if (!mustShip.some((need) => !shippedRel.includes(need))) ok('入口、面板产物与自描述都在 files 里');
 
 for (const pattern of [/\.coopanion-orig$/, /\.chat-image-patch\.json$/, /\.env$/i, /\.log$/i]) {
   const hits = shippedRel.filter((file) => pattern.test(file));
@@ -261,14 +284,15 @@ const appRoot = opt('app') || process.env.COOPANION_APP_ROOT || (() => {
 })();
 
 if (flag('only-static')) {
-  hint('--only-static：跳过补丁自测与 dry-mount');
+  hint('--only-static：跳过补丁自测、dry-mount 与自描述核对');
 } else if (!appRoot || !existsSync(join(appRoot, 'build', 'cortico', 'src', 'extensions', 'manifest.ts'))) {
-  if (flag('quiet-host')) hint('没找到本机 Coopanion 安装：跳过补丁自测与 dry-mount');
-  else hint('没找到本机 Coopanion 安装（用 --app <安装>\\resources\\app 指一下）：跳过补丁自测与 dry-mount');
+  if (flag('quiet-host')) hint('没找到本机 Coopanion 安装：跳过补丁自测、dry-mount 与自描述核对');
+  else hint('没找到本机 Coopanion 安装（用 --app <安装>\\resources\\app 指一下）：跳过补丁自测、dry-mount 与自描述核对');
 } else {
   console.log(`\n宿主：${appRoot}`);
   runSuite('补丁自测（tools/patch.mjs）', [join('tools', 'patch.mjs'), '--app', appRoot], { COOPANION_APP_ROOT: appRoot });
   runSuite('dry-mount（tools/drymount.mts）', ['--experimental-transform-types', join('tools', 'drymount.mts')], { COOPANION_APP_ROOT: appRoot });
+  runSuite('自描述核对（tools/describe.mts --check）', ['--experimental-transform-types', join('tools', 'describe.mts'), '--check'], { COOPANION_APP_ROOT: appRoot });
 }
 
 if (!hadStateFile && existsSync(stateFile)) {

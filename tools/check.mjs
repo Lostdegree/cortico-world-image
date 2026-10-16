@@ -1,8 +1,8 @@
 /**
  * 图片工坊的离线检查。
  *
- * 不联网、不装 DOM：用一份假 DOM 把 dist/console.js 的两个面板真的挂起来跑，
- * 服务端那侧则直接调 ImageWorld 的工具与控制台方法。
+ * 不联网、不装 DOM：用一份假 DOM 把 dist/webui.js 的两个面板真的挂起来跑，
+ * 服务端那侧则直接调 ImageWorld 的工具与 WebUI 方法。
  *
  *   node tools/check.mjs
  */
@@ -368,7 +368,7 @@ try {
   check(world.id === definition.id, 'world.id 与 def.id 一致');
   check(typeof world.envPromptVars === 'function', '有 envPromptVars()');
   check(typeof world.tools === 'function', '有 tools()');
-  check(typeof world.console === 'function', '有 console()');
+  check(typeof world.webUi === 'function', '有 webUi()');
 
   section('工具声明');
   const tools = world.tools();
@@ -392,11 +392,11 @@ try {
   check(isAbsolute(String(vars?.['image.dir'] ?? '')), 'image.dir 是绝对路径', String(vars?.['image.dir']));
   check(typeof vars?.['image.ready'] === 'string' && vars['image.ready'] !== '', 'image.ready 非空', String(vars?.['image.ready']));
 
-  section('控制台声明（对齐 dry-mount）');
-  const declined = world.console('zh');
-  check(declined && typeof declined === 'object', 'console() 返回对象');
-  check(typeof declined.invoke === 'function', 'console().invoke 是函数');
-  check(typeof declined.stream === 'function', 'console().stream 是函数');
+  section('WebUI 声明（对齐 dry-mount）');
+  const declined = world.webUi('zh');
+  check(declined && typeof declined === 'object', 'webUi() 返回对象');
+  check(typeof declined.invoke === 'function', 'webUi().invoke 是函数');
+  check(typeof declined.stream === 'function', 'webUi().stream 是函数');
   const panelIds = (declined.panels ?? []).map((p) => p.id);
   check(panelIds.length > 0, '声明了面板');
   check(panelIds.every((id) => /^[a-z0-9-]+$/.test(id)), '面板 id 合法', panelIds.join(','));
@@ -583,8 +583,8 @@ try {
   check(stored?.value === '', 'clearKey 把值写空');
 
   section('浏览器面板 bundle');
-  const consoleSrc = readFileSync(join(pkgDir, 'dist', 'console.js'), 'utf8');
-  const bundle = (await import(pathToFileURL(join(pkgDir, 'dist', 'console.js')).href)).default;
+  const webUiSrc = readFileSync(join(pkgDir, 'dist', 'webui.js'), 'utf8');
+  const bundle = (await import(pathToFileURL(join(pkgDir, 'dist', 'webui.js')).href)).default;
   check(!!bundle?.panels?.gallery?.mount, 'bundle 提供 gallery.mount');
   check(!!bundle?.panels?.status?.mount, 'bundle 提供 status.mount');
   const declaredIds = panelIds.slice().sort().join(',');
@@ -593,14 +593,14 @@ try {
 
   section('文案完整性');
   const dictKeys = (name) => {
-    const start = consoleSrc.indexOf(`const ${name} = {`);
-    const end = consoleSrc.indexOf('\n};', start);
-    const body = consoleSrc.slice(start, end);
+    const start = webUiSrc.indexOf(`const ${name} = {`);
+    const end = webUiSrc.indexOf('\n};', start);
+    const body = webUiSrc.slice(start, end);
     return new Set([...body.matchAll(/^\s*([A-Za-z0-9_]+):/gm)].map((m) => m[1]));
   };
   const zhKeys = dictKeys('ZH');
   const enKeys = dictKeys('EN');
-  const usedKeys = new Set([...consoleSrc.matchAll(/\btx\.([A-Za-z0-9_]+)/g)].map((m) => m[1]));
+  const usedKeys = new Set([...webUiSrc.matchAll(/\btx\.([A-Za-z0-9_]+)/g)].map((m) => m[1]));
   for (const key of usedKeys) {
     if (!zhKeys.has(key)) fail('中文文案缺键', `tx.${key}`);
     if (!enKeys.has(key)) fail('英文文案缺键', `tx.${key}`);
@@ -608,6 +608,54 @@ try {
   for (const key of zhKeys) if (!enKeys.has(key)) fail('中文有、英文没有的键', key);
   for (const key of enKeys) if (!zhKeys.has(key)) fail('英文有、中文没有的键', key);
   pass(`文案键：中文 ${zhKeys.size}、英文 ${enKeys.size}，代码用到 ${usedKeys.size}`);
+
+  section('契约与自描述（框架 0.2）');
+  const pkg = JSON.parse(readFileSync(join(pkgDir, 'package.json'), 'utf8'));
+  const manifest = pkg.cortico ?? {};
+  check(pkg.version === '0.2.0', 'version 抬到 0.2.0', String(pkg.version));
+  check(manifest.api === 6, 'cortico.api 是 6', String(manifest.api));
+  check(manifest.webUiClient === 'dist/webui.js', 'webUiClient 指向 dist/webui.js', String(manifest.webUiClient));
+  check(manifest.describe === 'describe.json', 'describe 指向 describe.json', String(manifest.describe));
+  for (const need of ['dist', 'describe.json']) {
+    check((pkg.files ?? []).includes(need), `files 带上 ${need}`);
+  }
+  check(existsSync(join(pkgDir, 'dist', 'webui.js')), 'dist/webui.js 在包里');
+  check(!existsSync(join(pkgDir, 'dist', 'console.js')), '旧的 dist/console.js 已经清掉');
+  check(/export default/.test(webUiSrc), '面板脚本有 export default');
+  check(!/^\s*import\s/m.test(webUiSrc), '面板脚本不 import 任何东西');
+  check(/\bctx\.ui\./.test(webUiSrc) && /\bctx\.invoke\(/.test(webUiSrc), '面板只用 ctx.ui / ctx.invoke');
+
+  const describeDecl = definition.describe;
+  check(!!describeDecl, 'definition 带上 describe');
+  check(Array.isArray(describeDecl?.tools), 'describe.tools 是数组');
+  check(Array.isArray(describeDecl?.events), 'describe.events 是数组');
+  const descToolNames = (describeDecl?.tools ?? []).map((t) => t.name);
+  check(
+    descToolNames.join(',') === names.slice().join(','),
+    'describe 里的工具名与 tools() 完全一致',
+    `${descToolNames.join(',')} vs ${names.join(',')}`,
+  );
+
+  const describePath = manifest.describe ?? 'describe.json';
+  let describeFile = null;
+  try {
+    describeFile = JSON.parse(readFileSync(join(pkgDir, describePath), 'utf8'));
+    pass(`${describePath} 是合法 JSON`);
+  } catch (err) {
+    fail(`${describePath} 读不了或不是合法 JSON`, String(err?.message ?? err));
+  }
+  if (describeFile) {
+    const fileToolNames = (describeFile.tools ?? []).map((t) => t.name);
+    check(
+      fileToolNames.join(',') === names.slice().join(','),
+      'describe.json 里的工具名与定义一致',
+      `${fileToolNames.join(',')} vs ${names.join(',')}`,
+    );
+    check((describeFile.events ?? []).length === (describeDecl?.events ?? []).length, 'describe.json 的事件条数与定义一致');
+    const envPrompt = (describeFile.prompts ?? []).find((p) => p.role === 'envPrompt');
+    check(!!envPrompt, 'describe.json 带上 envPrompt 角色');
+    check(/image_draw/.test(envPrompt?.content ?? ''), 'envPrompt 正文里有工具说明');
+  }
 
   section('作品页挂载');
   const gallery = makeEnv(world, 'gallery');
@@ -855,7 +903,7 @@ try {
   check(Array.isArray(restored?.restored?.restored) && String(restored?.restored?.skipped ?? '').includes('COOPANION_CHAT_IMAGE_PATCH'), '检查模式下 restore 不动安装目录', JSON.stringify(restored?.restored));
   const st = await world.invoke('status', 'state', []);
   check(Array.isArray(st?.patch?.backups), '状态里能读到备份列表', JSON.stringify(st?.patch?.backups));
-  const badge = (world.console('zh').badges ?? []).find((b) => b.label === '发图补丁');
+  const badge = (world.webUi('zh').badges ?? []).find((b) => b.label === '发图补丁');
   check(!!badge, '控制台徽章里有「发图补丁」');
   check(badge?.value === '未检查', '检查模式下徽章显示「未检查」', String(badge?.value));
 
