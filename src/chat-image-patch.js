@@ -12,6 +12,11 @@
  * `pet_show_image`（挂在桌宠世界上，见 `pet-show-image-tool`），
  * 以及它认「相对桌宠工作区」路径的那几处。
  *
+ * 还有一处落在桌宠包的装配层（`definition.ts` 的 `DESCRIBE`）：把 `pet_show_image` 补进
+ * `describe.tools`。框架 0.2 起会拿运行时的工具名核对自描述，对不上就每次启动记一条
+ * `工具不在 describe.tools 里,照常生效`（`undeclared-names.ts`）；这个工具是本扩展注入的，
+ * 桌宠包自己的自描述里当然没有（见 `pet-show-image-describe`）。
+ *
  * 这些文件都在安装目录里，而程序会自动更新、把变动覆写掉，所以每次启动都由本模块
  * 重新检查一遍：认得出的原文就改写，已经打过的跳过，认不出来就记一条失败并在控制台
  * 状态页报出来 —— 绝不猜着改。（文件同时留一份 `.coopanion-orig` 备份，只存第一次的原文。）
@@ -280,6 +285,39 @@ const PET_WORKSPACE_OPTION = [
 const PET_WORKSPACE_WIRE_ANCHOR = '        avatarFile: join(ctx.botDir, AVATAR_FILE),';
 const PET_WORKSPACE_WIRE = "        workspaceDir: () => join(ctx.botDir, 'workspace'),";
 
+// ---------------------------------------------------------------------------
+// 桌宠包的自描述（`definition.ts` 的 `DESCRIBE`）：补上 `pet_show_image`
+// ---------------------------------------------------------------------------
+
+/**
+ * 框架 0.2 起，运行时给出的工具名要和 `describe.tools` 对得上，对不上就记
+ * `工具不在 describe.tools 里,照常生效`（`undeclared-names.ts`，每个名字只记一次）。
+ * `pet_show_image` 是本扩展注入的，桌宠包自己的 `DESCRIBE` 里没有，所以在装配层把它的声明补进去；
+ * 措辞、参数与 `tags` 跟 `WORLD_EXTRA` 里的 `CHAT_IMAGE_TOOL` 保持同一份（改一处就要改两处）。
+ */
+const PET_DESCRIBE_LINE = /^([ \t]*)tools: describeTools\(\[\.\.\.petToolDecls\(\), \.\.\.CUA_TOOL_DECLS\], \{$/m;
+const PET_DESCRIBE_NEW = [
+  '  tools: describeTools([',
+  '    ...petToolDecls(),',
+  '    ...CUA_TOOL_DECLS,',
+  '    /* coopanion-chat-image: `pet_show_image` 的声明(实现注入在 world.ts)。 */',
+  '    {',
+  "      name: 'pet_show_image',",
+  "      tags: ['act'],",
+  "      description: '把本地一张图片贴到「对话」页(桌宠这一侧),配文可选。图先画好/存好再调用;只认 PNG、JPEG、WebP、GIF,单张不超过 8 MB。',",
+  '      parameters: {',
+  "        type: 'object',",
+  '        properties: {',
+  "          path: { type: 'string', description: '图片路径:绝对路径,或相对桌宠工作区的路径(例如 blobs/xx.jpg)。' },",
+  "          caption: { type: 'string', maxLength: 200, description: '配文,一句话;不写就只贴图。' },",
+  '        },',
+  "        required: ['path'],",
+  '      },',
+  '    },',
+  '  ], {',
+  "    pet_show_image: { zh: '把本机的一张图片贴到「对话」页,配文可选;只认 PNG / JPEG / WebP / GIF,单张不超过 8 MB。', en: 'Shows a picture from this computer on the chat page, with an optional caption; PNG, JPEG, WebP or GIF up to 8 MB.' },",
+].join('\n');
+
 const PET_WORKSPACE_DONE = 'raw = join(ws, raw);';
 const PET_RAW_OLD = "    const raw = typeof args.path === 'string' ? args.path.trim() : '';";
 const PET_RAW_NEW = "    let raw = typeof args.path === 'string' ? args.path.trim() : '';";
@@ -361,6 +399,7 @@ export function patchSpecs(appRoot) {
     { id: 'pet-workspace-option', file: join(pet, 'world.ts'), what: '桌宠包选项加 workspaceDir' },
     { id: 'pet-workspace-relpaths', file: join(pet, 'world.ts'), what: 'pet_show_image 认工作区相对路径' },
     { id: 'pet-workspace-wire', file: join(pet, 'definition.ts'), what: '装配层把工作区喂给桌宠世界' },
+    { id: 'pet-show-image-describe', file: join(pet, 'definition.ts'), what: '自描述里补上 pet_show_image' },
     // 这两处落在第三方 QQ 扩展上：没装就记 absent（不算失败），装了才改。
     { id: 'qq-image-relpaths', file: qq, what: 'QQ 发图/看图认工作区相对路径', optional: true },
     { id: 'qq-image-hints', file: qq, what: 'QQ 发图/看图的说明写明相对工作区', optional: true },
@@ -444,6 +483,20 @@ export function rulesFor(id) {
           const line = asWritten(PET_WORKSPACE_WIRE, nl(text));
           const out = swap(text, PET_WORKSPACE_WIRE_ANCHOR, `${PET_WORKSPACE_WIRE_ANCHOR}\n${line}`);
           return out === null ? { error: `没找到 ${PET_WORKSPACE_WIRE_ANCHOR}（桌宠包版本变了）` } : { text: out };
+        },
+      };
+    case 'pet-show-image-describe':
+      return {
+        // 0.1 的桌宠包还没有自描述（没有 `describeTools(`），那时没什么可补的。
+        done: (text) => !text.includes('describeTools(') || text.includes("name: 'pet_show_image'"),
+        apply: (text) => {
+          if (text.includes("name: 'pet_show_image'")) return { text };
+          const m = PET_DESCRIBE_LINE.exec(text);
+          if (!m) return { error: `没找到 ${PET_DESCRIBE_LINE.source}（桌宠包版本变了）` };
+          // 行首缩进跟着原文走（上游把 2 空格改成别的，也不至于排版崩掉）。
+          const pad = m[1] ?? '  ';
+          const body = pad === '  ' ? PET_DESCRIBE_NEW : PET_DESCRIBE_NEW.split('\n').map((line) => pad + line.slice(2)).join('\n');
+          return { text: text.slice(0, m.index) + asWritten(body, nl(text)) + text.slice(m.index + m[0].length) };
         },
       };
     case 'qq-image-relpaths':

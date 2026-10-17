@@ -62,10 +62,10 @@
 
 所以「另写一个扩展往对话页推图」是走不通的（别的世界推的事件不会经过桌宠的
 `chat.broadcast`，`chatPage()` 也只读 `source === 'desktop-pet'`）。0.1.23 之前靠补丁把这两段补上；
-**0.1.23 框架自己已经内置，那 4 处补丁已经删掉**（见下一节）。现在补丁一共 8 处：
-前 6 处是你这份安装里本来就有的文件（`world.ts` 5 处 + `definition.ts` 1 处，最后 3 处让
-`pet_show_image` 也认相对路径），后 2 处（`optional`）落在**第三方 QQ 扩展**上，没装那个扩展就记
-`absent`——不算失败、也不进状态页的总数：
+**0.1.23 框架自己已经内置，那 4 处补丁已经删掉**（见下一节）。现在补丁一共 9 处：
+前 7 处是你这份安装里本来就有的文件（`world.ts` 5 处 + `definition.ts` 2 处，其中 3 处让
+`pet_show_image` 也认相对路径，另 1 处把它补进桌宠包的自描述），后 2 处（`optional`）落在
+**第三方 QQ 扩展**上，没装那个扩展就记 `absent`——不算失败、也不进状态页的总数：
 
 | 补丁 id | 文件 | 做什么 |
 | --- | --- | --- |
@@ -75,6 +75,7 @@
 | `pet-workspace-option` | 桌宠 `src/world.ts` | 世界选项加 `workspaceDir?: () => string`（装配层注入桌宠工作区） |
 | `pet-workspace-relpaths` | 桌宠 `src/world.ts` | `pet_show_image` 的相对路径按 `workspaceDir()` 拼，说明也改成「绝对路径或相对工作区」 |
 | `pet-workspace-wire` | 桌宠 `src/definition.ts` | 装配层把 `join(ctx.botDir, 'workspace')` 传进世界 |
+| `pet-show-image-describe` | 桌宠 `src/definition.ts` | 把 `pet_show_image` 补进 `describe.tools`（框架 0.2 每次启动核对，缺了就记「工具不在 describe.tools 里」） |
 | `qq-image-relpaths`（可选） | `<安装>\data\extensions\node_modules\cortico-world-qq-better-alont1\src\world.ts` | `qq_send_image` / `qq_view_image` 认「相对桌宠工作区」的路径（见下） |
 | `qq-image-hints`（可选） | 同上 | 那两个工具的参数说明也改成「相对桌宠工作区的路径，如 `blobs/xx.jpg`」 |
 
@@ -134,6 +135,15 @@
 （比如桌宠包又改了装配代码、只有前两处打上）时，行为退回老样子：相对路径报错、要求绝对路径——
 不会静默拿到错的路径。
 
+### 桌宠包的自描述（`pet-show-image-describe`）
+
+框架 0.2 起，世界启动时会拿运行时的工具名核对 `describe.tools`，对不上的每个名字记一条
+`worlds.<id>: 工具不在 describe.tools 里,照常生效`（`undeclared-names.ts`，每个名字只记一次）。
+`pet_show_image` 是本扩展注入的，桌宠包自己的 `DESCRIBE`（`definition.ts` 里的
+`describeTools([...petToolDecls(), ...CUA_TOOL_DECLS], {…})`）当然没有它，所以这一处把它的声明补进去——
+措辞、参数、`tags` 跟 `world.ts` 里那张工具表保持同一份（**改一处就要改两处**）。
+0.1 的桌宠包还没有自描述概念，那时这处 `done` 直接为真、什么都不做。
+
 ### 自愈怎么工作
 
 扩展模块的顶层代码**每次启动都会跑**（`loadExtensions()` 无差别 import 所有已装扩展，与
@@ -141,7 +151,7 @@
 
 1. 启动时打一遍补丁 → 如果这次真的改了文件，状态文件里记 `requested: true`，并在 4 秒后
    `POST http://127.0.0.1:<web.port>/api/run/restart` 请控制台重启一次（桌宠侧的 TS 源码要重启才装载）；
-2. 重启后再跑：文件已经是打过补丁的样子 → 8 处全部 `done`（没装 QQ 扩展的那 2 处是 `absent`）→ 不再请求重启（**不会反复重启**）；
+2. 重启后再跑：文件已经是打过补丁的样子 → 9 处全部 `done`（没装 QQ 扩展的那 2 处是 `absent`）→ 不再请求重启（**不会反复重启**）；
 3. 程序自动更新把文件覆写回原样 → 下一轮启动又补上，再重启一次，回到第 2 步；
 4. 万一「已经请求过重启，这次还是缺」——说明补丁根本落不到进程真正加载的那份文件上，
    这时记 `stuck`，**故意不再重启**（防死循环），并在「状态」页把 `id — 原因` 列出来给人看。
@@ -149,7 +159,7 @@
 状态文件是扩展目录下的 `.chat-image-patch.json`（`{at, appRoot, patched, failed, requested}`）。
 想彻底关掉这套自愈（比如做回归测试），设环境变量 `COOPANION_CHAT_IMAGE_PATCH=0`。
 
-控制台「图片工坊 → 状态」页多出一张**发图补丁**卡片：装没装上、8 处在不在、上次检查时间、
+控制台「图片工坊 → 状态」页多出一张**发图补丁**卡片：装没装上、9 处在不在、上次检查时间、
 每一处的备份（`<文件>.coopanion-orig` 在不在、与当前文件是否一致）、上次还原记录、
 上次重启请求的结果，外加三个按钮：
 
@@ -194,7 +204,7 @@
 
 1. 把 `package.json` 的 `version` 抬一格（例如 `0.1.3` → `0.1.4`）；
 2. 重启控制台（状态页「重启控制台」或 `node tools/patch.mjs --restart`）；
-3. 程序内窗口自动重载 → 新的 URL `/assets/extensions/cortico-world-image/0.2.0/webui.js`
+3. 程序内窗口自动重载 → 新的 URL `/assets/extensions/cortico-world-image/0.2.1/webui.js`
    取到新脚本，旧 URL 立刻变 404。
 
 不想抬版本也行，但要**先完全退出程序**再删缓存目录：`<安装>\data\Cache`、
@@ -256,7 +266,7 @@ pnpm add "D:\path\to\cortico-world-image" --ignore-workspace
 
 **装完必须重启 Coopanion**：扩展是 ESM 模块，进程内不会重新加载。重启后在
 `config.json` 的 `worlds.image.enabled` 上打开（控制台里也有这个开关），四个工具才会挂给桌宠。
-同一轮启动里，扩展还会把「对话页发图」那 8 处补丁检查一遍（其中 2 处是 QQ 扩展的可选补丁，没装就跳过），缺了就补、并自己请控制台重启一次
+同一轮启动里，扩展还会把「对话页发图」那 9 处补丁检查一遍（其中 2 处是 QQ 扩展的可选补丁，没装就跳过），缺了就补、并自己请控制台重启一次
 （详见上一节）。
 
 ### 一份能用的 `worlds.image` 长什么样
@@ -416,7 +426,7 @@ cortico-world-image/
 │  ├─ definition.js    # id/label/defaults/preflight/create
 │  ├─ config.js        # worlds.image 默认值、中英文案、配置组 schema
 │  ├─ world.js         # ImageWorld：工具、控制台面板、流式推送、生命周期
-│  ├─ chat-image-patch.js # 对话页发图的 8 处补丁（含 3 处工作区相对路径、2 处可选的 QQ 扩展）、状态文件、重启请求（自愈核心）
+│  ├─ chat-image-patch.js # 对话页发图的 9 处补丁（含 3 处工作区相对路径、1 处自描述、2 处可选的 QQ 扩展）、状态文件、重启请求（自愈核心）
 │  ├─ api.js           # OpenAI 兼容客户端的取图/落盘/错误归一化
 │  ├─ gallery.js       # 作品仓库：目录 + index.json
 │  └─ png.js           # 零依赖 PNG 编码器 + 自检样图

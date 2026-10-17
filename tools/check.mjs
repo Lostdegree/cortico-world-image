@@ -612,7 +612,7 @@ try {
   section('契约与自描述（框架 0.2）');
   const pkg = JSON.parse(readFileSync(join(pkgDir, 'package.json'), 'utf8'));
   const manifest = pkg.cortico ?? {};
-  check(pkg.version === '0.2.0', 'version 抬到 0.2.0', String(pkg.version));
+  check(/^0\.2\.\d+$/.test(pkg.version), 'version 在 0.2.x 线上', String(pkg.version));
   check(manifest.api === 6, 'cortico.api 是 6', String(manifest.api));
   check(manifest.webUiClient === 'dist/webui.js', 'webUiClient 指向 dist/webui.js', String(manifest.webUiClient));
   check(manifest.describe === 'describe.json', 'describe 指向 describe.json', String(manifest.describe));
@@ -753,10 +753,10 @@ try {
   }
   const specs = patchMod.patchSpecs('X:/not-a-real-app');
   const specIds = specs.map((s) => s.id);
-  check(specIds.length === 8, '补丁一共 8 处（5 处打 world.ts + 1 处打 definition.ts + 2 处可选的 QQ 扩展）', String(specIds.length));
+  check(specIds.length === 9, '补丁一共 9 处（5 处打 world.ts + 2 处打 definition.ts + 2 处可选的 QQ 扩展）', String(specIds.length));
   check(new Set(specIds).size === specIds.length, '补丁 id 不重复', specIds.join(','));
-  const wantIds = ['pet-fs-import', 'pet-path-import', 'pet-show-image-tool', 'pet-workspace-option', 'pet-workspace-relpaths', 'pet-workspace-wire', 'qq-image-relpaths', 'qq-image-hints'];
-  check(wantIds.every((id) => specIds.includes(id)), '8 处补丁 id 齐全', specIds.join(','));
+  const wantIds = ['pet-fs-import', 'pet-path-import', 'pet-show-image-tool', 'pet-workspace-option', 'pet-workspace-relpaths', 'pet-workspace-wire', 'pet-show-image-describe', 'qq-image-relpaths', 'qq-image-hints'];
+  check(wantIds.every((id) => specIds.includes(id)), '9 处补丁 id 齐全', specIds.join(','));
   check(specIds.every((id) => wantIds.includes(id)), '没有多余的补丁 id', specIds.join(','));
   // 防回归：框架 0.1.23 起原生就能把 say 的图发到对话页（chat.ts 的 wireImages() + 客户端 chat-thumb 缩略图），
   // 这 4 处补丁已经删掉，不许再回来（锚点早就不匹配，留着只会每次启动都记一条失败）。
@@ -864,6 +864,32 @@ try {
   check(!wirePatched?.error && wirePatched.text.includes("workspaceDir: () => join(ctx.botDir, 'workspace'),"), '装配层把桌宠工作区传下去', wirePatched?.error ?? '');
   check(wirePatched.text.indexOf('workspaceDir:') > wirePatched.text.indexOf('avatarFile:'), '接在 avatarFile 后面（不动别的行）');
   check(petWire.done(wirePatched?.text ?? ''), '接线补完认成「已打过」（幂等）');
+
+  // 框架 0.2 起每次启动都拿运行时的工具名核对 describe.tools，对不上就记
+  // `worlds.desktop-pet: 工具不在 describe.tools 里,照常生效`（undeclared-names.ts）。
+  // pet_show_image 是本扩展注入的，得补进桌宠包的自描述。
+  const petDescribe = patchMod.rulesFor('pet-show-image-describe');
+  check(typeof petDescribe?.done === 'function' && typeof petDescribe?.apply === 'function', 'pet-show-image-describe 有 done/apply');
+  check(specs.find((s) => s.id === 'pet-show-image-describe')?.file.endsWith('definition.ts'), '自描述那处补丁打在装配层 definition.ts', JSON.stringify(specs.find((s) => s.id === 'pet-show-image-describe')));
+  check(Boolean(petDescribe.apply('export const nope = 1;\n')?.error), '桌宠自描述换了写法就报失败，不瞎改');
+  const describeFixture = [
+    "import { describeTools, type WorldDescribe } from 'cortico/world.ts';",
+    'const DESCRIBE: WorldDescribe = {',
+    '  tools: describeTools([...petToolDecls(), ...CUA_TOOL_DECLS], {',
+    "    pet_say: { zh: '说话', en: 'talks' },",
+    '  }),',
+    '  events: [],',
+    '};',
+    '',
+  ].join('\n');
+  check(!petDescribe.done(describeFixture), '夹具是没补过 pet_show_image 的自描述（有东西可补）');
+  const described = petDescribe.apply(describeFixture);
+  check(!described?.error, '自描述里补上 pet_show_image', String(described?.error ?? 'ok'));
+  check((described?.text ?? '').includes("      name: 'pet_show_image',") && (described?.text ?? '').includes("      tags: ['act'],"), '条目带名字与 tags（和工具表一致）');
+  check((described?.text ?? '').includes("    pet_show_image: { zh: '把本机的一张图片贴到「对话」页"), '也补了中英一句话（summary）');
+  check((described?.text ?? '').includes('    pet_say: { zh: ') && (described?.text ?? '').includes('...CUA_TOOL_DECLS,') && (described?.text ?? '').includes('  events: [],'), '原有的 summary / 事件声明原样保留');
+  check(petDescribe.done(described?.text ?? ''), '补完认成「已打过」（幂等）');
+  check(petDescribe.apply(described?.text ?? '')?.text === described?.text, '已经打过再 apply 不改动（runner 之外调用也安全）');
 
   const portWork = mkdtempSync(join(tmpdir(), 'image-port-'));
   mkdirSync(join(portWork, 'resources', 'app'), { recursive: true });

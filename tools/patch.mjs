@@ -297,6 +297,11 @@ function selfTest(appRoot) {
   copyFileSync(pristine(join(petSrc, 'world.ts')), join(petDst, 'world.ts'));
   copyFileSync(pristine(join(petSrc, 'definition.ts')), join(petDst, 'definition.ts'));
 
+  // 0.1 的桌宠包还没有自描述（没有 `describeTools(`），那种宿主上「补自描述」那处不需要，
+  // 于是每轮的计数比 0.2 宿主少 1。
+  const withDescribe = readFileSync(pristine(join(petSrc, 'definition.ts')), 'utf8').includes('describeTools(');
+  const petCount = withDescribe ? 7 : 6;
+
   // 可选补丁落在第三方 QQ 扩展上（真安装在 `<安装>/data/extensions/…`）：
   // 这里用 COOPANION_EXTENSIONS_DIR 指到副本里的一棵假扩展，不碰真安装。
   const fakeext = join(work, 'fakeext');
@@ -306,14 +311,20 @@ function selfTest(appRoot) {
   const stateDir = join(work, 'state');
   const first = applyChatImagePatches(work, { stateDir });
   ok(first.appRoot === resolve(work), '认出这份 app', String(first.appRoot));
-  ok(first.results.length === 8, '一共 8 处补丁（含 2 处可选的 QQ 扩展）', `实际 ${first.results.length}`);
+  ok(first.results.length === 9, '补丁清单一共 9 处（含 2 处可选的 QQ 扩展）', `实际 ${first.results.length}`);
   ok(first.failed.length === 0, '全部改写成功', first.results.filter((r) => r.state !== 'patched').map((r) => `${r.id}:${r.state}:${r.error ?? ''}`).join(' / '));
-  ok(first.patched.length === 8 && first.restartPending === true, '第一轮：8 处新打，并请求重启', JSON.stringify(first.patched));
+  ok(first.patched.length === petCount + 2 && first.restartPending === true, `第一轮：${petCount + 2} 处新打，并请求重启`, JSON.stringify(first.patched));
   ok(existsSync(`${qqFile}.coopanion-orig`), 'QQ 扩展也留了原文备份', qqFile);
   const qqCheck = syntaxCheck(appRoot, qqFile);
   ok(qqCheck.skipped || qqCheck.code === 0, 'QQ 扩展改完能过 TS 语法', JSON.stringify(qqCheck));
   const definition = readFileSync(join(petDst, 'definition.ts'), 'utf8');
   ok(definition.includes("workspaceDir: () => join(ctx.botDir, 'workspace'),"), 'definition.ts：把桌宠工作区传给世界（装配层那行）', definition.split('\n').filter((l) => l.includes('workspaceDir')).join(' | '));
+  // 框架 0.2 起每次启动核对 describe.tools，对不上会记「工具不在 describe.tools 里,照常生效」。
+  ok(
+    !withDescribe || (definition.includes("name: 'pet_show_image'") && definition.includes("tags: ['act']")),
+    withDescribe ? 'definition.ts：自描述里补上 pet_show_image（工具表与实现同一份措辞）' : 'definition.ts：旧宿主没有自描述，这处不需要',
+    definition.split('\n').filter((l) => l.includes('pet_show_image')).join(' | '),
+  );
   ok(existsSync(join(petDst, 'definition.ts.coopanion-orig')), 'definition.ts 也留了原文备份');
 
   const second = applyChatImagePatches(work, { stateDir });
@@ -323,7 +334,7 @@ function selfTest(appRoot) {
   // 认不出原文（第三方扩展改了写法）时必须报失败、不能瞎改。
   const stranger = rulesFor('qq-image-relpaths').apply("export const nope = 1;\n");
   ok(Boolean(stranger?.error), 'QQ 扩展换了写法就报失败，不瞎改', JSON.stringify(stranger));
-  for (const id of ['pet-workspace-option', 'pet-workspace-relpaths', 'pet-workspace-wire']) {
+  for (const id of ['pet-workspace-option', 'pet-workspace-relpaths', 'pet-workspace-wire', 'pet-show-image-describe']) {
     const junk = rulesFor(id).apply("export const nope = 1;\n");
     ok(Boolean(junk?.error), `${id} 换了写法就报失败，不瞎改`, JSON.stringify(junk));
   }
@@ -355,7 +366,7 @@ function selfTest(appRoot) {
   copyFileSync(pristine(join(petSrc, 'definition.ts')), join(pet2, 'definition.ts'));
   const state2 = join(work2, 'state');
   const again1 = applyChatImagePatches(work2, { stateDir: state2 });
-  ok(again1.patched.length === 6 && again1.restartPending === true && again1.stuck === false, '自愈第一幕：打上 6 处并请求一次重启', JSON.stringify({ patched: again1.patched.length, pending: again1.restartPending, stuck: again1.stuck }));
+  ok(again1.patched.length === petCount && again1.restartPending === true && again1.stuck === false, `自愈第一幕：打上 ${petCount} 处并请求一次重启`, JSON.stringify({ patched: again1.patched.length, pending: again1.restartPending, stuck: again1.stuck }));
   copyFileSync(pristine(join(petSrc, 'world.ts')), join(pet2, 'world.ts'));
   const again2 = applyChatImagePatches(work2, { stateDir: state2 });
   ok(again2.patched.includes('pet-workspace-option') && again2.failed.length === 0, '自愈第二幕：被覆写后照样补回来', JSON.stringify(again2.patched));
@@ -374,22 +385,24 @@ function selfTest(appRoot) {
   copyFileSync(pristine(join(petSrc, 'definition.ts')), join(pet3, 'definition.ts'));
   const state3 = join(work3, 'state');
   const before3 = applyChatImagePatches(work3, { stateDir: state3 });
-  ok(before3.patched.length === 6 && before3.failed.length === 0, '还原前：6 处都打上了', JSON.stringify({ patched: before3.patched.length, failed: before3.failed }));
+  ok(before3.patched.length === petCount && before3.failed.length === 0, `还原前：${petCount} 处都打上了`, JSON.stringify({ patched: before3.patched.length, failed: before3.failed }));
   const bk3 = patchBackupStatus(work3);
-  ok(bk3.length === 6 && bk3.every((b) => b.hasFile && b.hasBackup && b.patched && !b.same), '备份状态：6 处都有原文备份、都认成「已打过」', JSON.stringify(bk3.map((b) => `${b.id}:${b.hasBackup}/${b.patched}/${b.same}`)));
+  const bk3Here = withDescribe ? bk3 : bk3.filter((b) => b.id !== 'pet-show-image-describe');
+  ok(bk3Here.length === petCount && bk3Here.every((b) => b.hasFile && b.hasBackup && b.patched && !b.same), `备份状态：${petCount} 处都有原文备份、都认成「已打过」`, JSON.stringify(bk3.map((b) => `${b.id}:${b.hasBackup}/${b.patched}/${b.same}`)));
   const back3 = restoreChatImagePatches(work3, { stateDir: state3 });
-  // 6 处补丁落在 2 个文件上：每个文件还原一次，同一文件上后面的补丁就变成「本来就是原文」。
+  // 补丁落在 2 个文件上：每个文件还原一次，同一文件上后面的补丁就变成「本来就是原文」。
   ok(back3.failed.length === 0 && back3.restored.length === 2 && back3.results.filter((r) => r.state !== 'absent').every((r) => r.state === 'restored' || r.state === 'same'), '还原：2 个文件各按备份覆盖一次（同一文件上的其余补丁认成 same）', JSON.stringify({ restored: back3.restored, states: back3.results.map((r) => `${r.id}:${r.state}`) }));
   ok(readFileSync(join(pet3, 'world.ts'), 'utf8') === readFileSync(pristine(join(petSrc, 'world.ts')), 'utf8'), '还原后 world.ts 与原文逐字一致');
   ok(readFileSync(join(pet3, 'definition.ts'), 'utf8') === readFileSync(pristine(join(petSrc, 'definition.ts')), 'utf8'), '还原后 definition.ts 与原文逐字一致');
   const bk3b = patchBackupStatus(work3);
-  ok(bk3b.every((b) => b.hasBackup && b.same && !b.patched), '还原后：备份还在，状态变成「未打」', JSON.stringify(bk3b.map((b) => `${b.id}:${b.hasBackup}/${b.same}/${b.patched}`)));
+  const bk3bHere = withDescribe ? bk3b : bk3b.filter((b) => b.id !== 'pet-show-image-describe');
+  ok(bk3bHere.every((b) => b.hasBackup && b.same && !b.patched), '还原后：备份还在，状态变成「未打」', JSON.stringify(bk3b.map((b) => `${b.id}:${b.hasBackup}/${b.same}/${b.patched}`)));
   const saved3 = JSON.parse(readFileSync(join(state3, '.chat-image-patch.json'), 'utf8'));
   ok(Array.isArray(saved3.restored) && saved3.restored.length === 2 && saved3.patched.length === 0 && saved3.requested === false, '状态文件记下「还原了哪些」', JSON.stringify({ restored: saved3.restored, patched: saved3.patched, requested: saved3.requested }));
   const back3b = restoreChatImagePatches(work3, { stateDir: state3 });
   ok(back3b.restored.length === 0 && back3b.results.filter((r) => r.state !== 'absent').every((r) => r.state === 'same'), '再还原一次：认成「本来就是原文」，不重复覆盖');
   const after3 = applyChatImagePatches(work3, { stateDir: state3 });
-  ok(after3.patched.length === 6 && after3.failed.length === 0, '还原之后还能重新打上（还原是可逆的）', JSON.stringify({ patched: after3.patched.length, failed: after3.failed }));
+  ok(after3.patched.length === petCount && after3.failed.length === 0, '还原之后还能重新打上（还原是可逆的）', JSON.stringify({ patched: after3.patched.length, failed: after3.failed }));
   rmSync(work3, { recursive: true, force: true });
 
   const world = readFileSync(join(petDst, 'world.ts'), 'utf8');
@@ -432,7 +445,7 @@ function selfTest(appRoot) {
   const third = applyChatImagePatches(bad, { stateDir: join(bad, 'state') });
   ok(third.failed.includes('pet-show-image-tool'), '原文对不上时记失败：pet-show-image-tool', JSON.stringify(third.failed));
   ok(third.results.find((r) => r.id === 'pet-show-image-tool')?.state === 'failed' && third.results.find((r) => r.id === 'pet-show-image-tool')?.error, '失败项状态是 failed 并给出原因', JSON.stringify(third.results.find((r) => r.id === 'pet-show-image-tool')));
-  ok(third.patched.length === 4, '同一份文件里别的补丁照常打上（world.ts 里不依赖 showImage() 的那几条）', JSON.stringify(third.patched));
+  ok(third.patched.length === (withDescribe ? 5 : 4), '同一份文件里别的补丁照常打上（不依赖 showImage() 的那几条）', JSON.stringify(third.patched));
 
   // 上一版写坏的 `[EXPR, TOOL]`（嵌套数组）要能被认出来并修成扁平的。
   const work4 = mkdtempSync(join(tmpdir(), 'coopanion-chat-image-nested-'));
