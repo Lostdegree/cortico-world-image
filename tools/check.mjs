@@ -872,10 +872,11 @@ try {
   check(typeof petDescribe?.done === 'function' && typeof petDescribe?.apply === 'function', 'pet-show-image-describe 有 done/apply');
   check(specs.find((s) => s.id === 'pet-show-image-describe')?.file.endsWith('definition.ts'), '自描述那处补丁打在装配层 definition.ts', JSON.stringify(specs.find((s) => s.id === 'pet-show-image-describe')));
   check(Boolean(petDescribe.apply('export const nope = 1;\n')?.error), '桌宠自描述换了写法就报失败，不瞎改');
+  // 0.2.1 的桌宠包在数组里多了一段 `...CUA_OFF_TOOL_DECLS`——夹具按当前真实写法来，另配一份多行写法。
   const describeFixture = [
     "import { describeTools, type WorldDescribe } from 'cortico/world.ts';",
     'const DESCRIBE: WorldDescribe = {',
-    '  tools: describeTools([...petToolDecls(), ...CUA_TOOL_DECLS], {',
+    '  tools: describeTools([...petToolDecls(), ...CUA_OFF_TOOL_DECLS, ...CUA_TOOL_DECLS], {',
     "    pet_say: { zh: '说话', en: 'talks' },",
     '  }),',
     '  events: [],',
@@ -884,12 +885,27 @@ try {
   ].join('\n');
   check(!petDescribe.done(describeFixture), '夹具是没补过 pet_show_image 的自描述（有东西可补）');
   const described = petDescribe.apply(describeFixture);
-  check(!described?.error, '自描述里补上 pet_show_image', String(described?.error ?? 'ok'));
+  check(!described?.error, '自描述里补上 pet_show_image（数组里多一段 spread 也认）', String(described?.error ?? 'ok'));
   check((described?.text ?? '').includes("      name: 'pet_show_image',") && (described?.text ?? '').includes("      tags: ['act'],"), '条目带名字与 tags（和工具表一致）');
   check((described?.text ?? '').includes("    pet_show_image: { zh: '把本机的一张图片贴到「对话」页"), '也补了中英一句话（summary）');
   check((described?.text ?? '').includes('    pet_say: { zh: ') && (described?.text ?? '').includes('...CUA_TOOL_DECLS,') && (described?.text ?? '').includes('  events: [],'), '原有的 summary / 事件声明原样保留');
+  check((described?.text ?? '').includes('...CUA_OFF_TOOL_DECLS,'), '数组里原有的 spread 一个不少');
   check(petDescribe.done(described?.text ?? ''), '补完认成「已打过」（幂等）');
   check(petDescribe.apply(described?.text ?? '')?.text === described?.text, '已经打过再 apply 不改动（runner 之外调用也安全）');
+  const multilineFixture = [
+    'const DESCRIBE: WorldDescribe = {',
+    '  tools: describeTools(',
+    '    [...petToolDecls(), ...CUA_TOOL_DECLS],',
+    '    {',
+    "      pet_say: { zh: '说话', en: 'talks' },",
+    '    },',
+    '  ),',
+    '  events: [],',
+    '};',
+    '',
+  ].join('\n');
+  const multiline = petDescribe.apply(multilineFixture);
+  check(!multiline?.error && (multiline?.text ?? '').includes("name: 'pet_show_image',"), '多行写法也补得上（上游换排版不至于失效）', String(multiline?.error ?? 'ok'));
 
   const portWork = mkdtempSync(join(tmpdir(), 'image-port-'));
   mkdirSync(join(portWork, 'resources', 'app'), { recursive: true });

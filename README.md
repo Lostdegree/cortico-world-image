@@ -140,8 +140,11 @@
 框架 0.2 起，世界启动时会拿运行时的工具名核对 `describe.tools`，对不上的每个名字记一条
 `worlds.<id>: 工具不在 describe.tools 里,照常生效`（`undeclared-names.ts`，每个名字只记一次）。
 `pet_show_image` 是本扩展注入的，桌宠包自己的 `DESCRIBE`（`definition.ts` 里的
-`describeTools([...petToolDecls(), ...CUA_TOOL_DECLS], {…})`）当然没有它，所以这一处把它的声明补进去——
+`describeTools([...petToolDecls(), …], {…})`）当然没有它，所以这一处把它的声明插到那个数组末尾——
 措辞、参数、`tags` 跟 `world.ts` 里那张工具表保持同一份（**改一处就要改两处**）。
+上游这段写法改过几次（0.2.1 的桌宠包在数组里多了一段 `...CUA_OFF_TOOL_DECLS`，也出现过换行排版），
+所以这处不按整行匹配：只认 `tools: describeTools(`，数括号找到数组结尾再插，上游加减一段 spread 也照样打得上去；
+缩进跟着 `tools:` 那行走。
 0.1 的桌宠包还没有自描述概念，那时这处 `done` 直接为真、什么都不做。
 
 ### 自愈怎么工作
@@ -204,7 +207,7 @@
 
 1. 把 `package.json` 的 `version` 抬一格（例如 `0.1.3` → `0.1.4`）；
 2. 重启控制台（状态页「重启控制台」或 `node tools/patch.mjs --restart`）；
-3. 程序内窗口自动重载 → 新的 URL `/assets/extensions/cortico-world-image/0.2.1/webui.js`
+3. 程序内窗口自动重载 → 新的 URL `/assets/extensions/cortico-world-image/0.2.2/webui.js`
    取到新脚本，旧 URL 立刻变 404。
 
 不想抬版本也行，但要**先完全退出程序**再删缓存目录：`<安装>\data\Cache`、

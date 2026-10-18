@@ -295,28 +295,61 @@ const PET_WORKSPACE_WIRE = "        workspaceDir: () => join(ctx.botDir, 'worksp
  * `pet_show_image` 是本扩展注入的，桌宠包自己的 `DESCRIBE` 里没有，所以在装配层把它的声明补进去；
  * 措辞、参数与 `tags` 跟 `WORLD_EXTRA` 里的 `CHAT_IMAGE_TOOL` 保持同一份（改一处就要改两处）。
  */
-const PET_DESCRIBE_LINE = /^([ \t]*)tools: describeTools\(\[\.\.\.petToolDecls\(\), \.\.\.CUA_TOOL_DECLS\], \{$/m;
-const PET_DESCRIBE_NEW = [
-  '  tools: describeTools([',
-  '    ...petToolDecls(),',
-  '    ...CUA_TOOL_DECLS,',
-  '    /* coopanion-chat-image: `pet_show_image` 的声明(实现注入在 world.ts)。 */',
-  '    {',
-  "      name: 'pet_show_image',",
-  "      tags: ['act'],",
-  "      description: '把本地一张图片贴到「对话」页(桌宠这一侧),配文可选。图先画好/存好再调用;只认 PNG、JPEG、WebP、GIF,单张不超过 8 MB。',",
-  '      parameters: {',
-  "        type: 'object',",
-  '        properties: {',
-  "          path: { type: 'string', description: '图片路径:绝对路径,或相对桌宠工作区的路径(例如 blobs/xx.jpg)。' },",
-  "          caption: { type: 'string', maxLength: 200, description: '配文,一句话;不写就只贴图。' },",
-  '        },',
-  "        required: ['path'],",
+const PET_DESCRIBE_ANCHOR = 'tools: describeTools(';
+
+/**
+ * 桌宠包升级里这段数组反复改过写法（0.2.1 起多了一段 `...CUA_OFF_TOOL_DECLS`，也出现过换行排版），
+ * 所以不按整行匹配：只认 `tools: describeTools(`，数括号找到数组结尾，声明插在末尾。
+ */
+const findArrayEnd = (text, open) => {
+  let depth = 0;
+  for (let i = open; i < text.length; i += 1) {
+    const c = text[i];
+    if (c === '/' && text[i + 1] === '/') {
+      while (i < text.length && text[i] !== '\n') i += 1;
+      continue;
+    }
+    if (c === '/' && text[i + 1] === '*') {
+      const end = text.indexOf('*/', i + 2);
+      if (end < 0) return -1;
+      i = end + 1;
+      continue;
+    }
+    if (c === "'" || c === '"' || c === '`') {
+      const quote = c;
+      for (i += 1; i < text.length && text[i] !== quote; i += 1) {
+        if (text[i] === '\\') i += 1;
+      }
+      continue;
+    }
+    if (c === '[') depth += 1;
+    else if (c === ']') {
+      depth -= 1;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+};
+
+/** 基准缩进按 2 空格写，实际按 `tools:` 那行的缩进平移。 */
+const PET_DESCRIBE_TOOL = [
+  '  /* coopanion-chat-image: `pet_show_image` 的声明(实现注入在 world.ts)。 */',
+  '  {',
+  "    name: 'pet_show_image',",
+  "    tags: ['act'],",
+  "    description: '把本地一张图片贴到「对话」页(桌宠这一侧),配文可选。图先画好/存好再调用;只认 PNG、JPEG、WebP、GIF,单张不超过 8 MB。',",
+  '    parameters: {',
+  "      type: 'object',",
+  '      properties: {',
+  "        path: { type: 'string', description: '图片路径:绝对路径,或相对桌宠工作区的路径(例如 blobs/xx.jpg)。' },",
+  "        caption: { type: 'string', maxLength: 200, description: '配文,一句话;不写就只贴图。' },",
   '      },',
+  "      required: ['path'],",
   '    },',
-  '  ], {',
-  "    pet_show_image: { zh: '把本机的一张图片贴到「对话」页,配文可选;只认 PNG / JPEG / WebP / GIF,单张不超过 8 MB。', en: 'Shows a picture from this computer on the chat page, with an optional caption; PNG, JPEG, WebP or GIF up to 8 MB.' },",
-].join('\n');
+  '  },',
+];
+const PET_DESCRIBE_SUMMARY =
+  "pet_show_image: { zh: '把本机的一张图片贴到「对话」页,配文可选;只认 PNG / JPEG / WebP / GIF,单张不超过 8 MB。', en: 'Shows a picture from this computer on the chat page, with an optional caption; PNG, JPEG, WebP or GIF up to 8 MB.' },";
 
 const PET_WORKSPACE_DONE = 'raw = join(ws, raw);';
 const PET_RAW_OLD = "    const raw = typeof args.path === 'string' ? args.path.trim() : '';";
@@ -491,12 +524,22 @@ export function rulesFor(id) {
         done: (text) => !text.includes('describeTools(') || text.includes("name: 'pet_show_image'"),
         apply: (text) => {
           if (text.includes("name: 'pet_show_image'")) return { text };
-          const m = PET_DESCRIBE_LINE.exec(text);
-          if (!m) return { error: `没找到 ${PET_DESCRIBE_LINE.source}（桌宠包版本变了）` };
-          // 行首缩进跟着原文走（上游把 2 空格改成别的，也不至于排版崩掉）。
-          const pad = m[1] ?? '  ';
-          const body = pad === '  ' ? PET_DESCRIBE_NEW : PET_DESCRIBE_NEW.split('\n').map((line) => pad + line.slice(2)).join('\n');
-          return { text: text.slice(0, m.index) + asWritten(body, nl(text)) + text.slice(m.index + m[0].length) };
+          const at = text.indexOf(PET_DESCRIBE_ANCHOR);
+          if (at < 0) return { error: `没找到 ${PET_DESCRIBE_ANCHOR}（桌宠包版本变了）` };
+          // 缩进跟着原文 `tools:` 那行走（上游把 2 空格改成别的，也不至于排版崩掉）。
+          const pad = /^[ \t]*/.exec(text.slice(text.lastIndexOf('\n', at) + 1, at))?.[0] ?? '  ';
+          // `describeTools(` 后面可能直接跟 `[`，也可能换行再跟（上游排版变过）。
+          const open = text.indexOf('[', at + PET_DESCRIBE_ANCHOR.length);
+          if (open < 0 || open - at > 200) return { error: `没找到 ${PET_DESCRIBE_ANCHOR} 后面的 \`[\`（桌宠包版本变了）` };
+          const close = findArrayEnd(text, open);
+          if (close < 0) return { error: `没找到 ${PET_DESCRIBE_ANCHOR} 配对的 \`]\`（桌宠包版本变了）` };
+          const tool = PET_DESCRIBE_TOOL.map((line) => pad + line).join('\n');
+          const withTool = `${text.slice(0, close)},\n${tool}\n${pad}${text.slice(close)}`;
+          // 数组后面那个参数对象里再补一句中英文 summary（模型读的是它）。
+          const objOpen = withTool.indexOf('{', findArrayEnd(withTool, open));
+          if (objOpen < 0) return { error: `没找到 ${PET_DESCRIBE_ANCHOR} 后面的 summary 对象（桌宠包版本变了）` };
+          const withSummary = `${withTool.slice(0, objOpen + 1)}\n${pad}  ${PET_DESCRIBE_SUMMARY}${withTool.slice(objOpen + 1)}`;
+          return { text: withSummary };
         },
       };
     case 'qq-image-relpaths':
