@@ -84,13 +84,13 @@ const ZH = {
   runtime: '运行时',
   unknown: '未知',
   loadBad: '读不到作品列表',
-  patchTitle: '对话页发图',
-  patchDesc: '桌宠要在控制台「对话」页发图，得改安装目录里的两处代码（页面渲染、桌宠的事件出口）。程序自动更新会把它们覆写回去，所以每次启动都重打一遍；打不上会显示在这里。',
+  patchTitle: 'QQ 发图路径',
+  patchDesc: 'QQ 扩展的 qq_send_image / qq_view_image 只按扩展目录解析本地路径；这里把它们改成先按桌宠工作区解析、扩展目录兜底。第三方包升级会把改动覆写掉，所以每次启动都重打一遍；打不上会显示在这里。',
   patchWhere: '安装目录',
   patchCount: '补丁',
   patchAt: '上次检查',
   patchLastRestart: '上次重启请求',
-  patchAllDone: '7 处都在',
+  patchAllDone: '处都在',
   patchPending: '刚补上，重启后生效',
   patchMissing: '有没打上的',
   patchNoApp: '没找到安装目录',
@@ -100,7 +100,7 @@ const ZH = {
   patchRepatch: '重打补丁',
   patchRestore: '还原备份',
   patchRestoreAsk: '按备份还原补丁？',
-  patchRestoreBody: '用更新下发的原文（.coopanion-orig）覆盖回这三份文件，桌宠发图会随之失效（重启控制台后生效）。备份不会删，随时能再打回来。',
+  patchRestoreBody: '用更新下发的原文（.coopanion-orig）覆盖回 QQ 扩展的 world.ts，QQ 发图改回只认扩展目录里的相对路径（重启控制台后生效）。备份不会删，随时能再打回来。',
   patchRestoreDone: '已按备份还原',
   patchRestoreNone: '没动：文件本来就是原文',
   patchRestoreBad: '还原出错',
@@ -111,7 +111,7 @@ const ZH = {
   patchBackupSame: '与当前一致',
   patchRestart: '重启控制台',
   patchRestartAsk: '现在重启控制台？',
-  patchRestartBody: '控制台会自己重启（几秒钟），正在跑的对话会断。桌宠那一侧的补丁要重启才装载。',
+  patchRestartBody: '控制台会自己重启（几秒钟），正在跑的对话会断。QQ 扩展的补丁要重启才装载。',
   patchRestartSent: '重启请求已发出，稍等几秒',
   patchRestartBad: '重启请求没送到',
   patchRepatched: '又对了一遍',
@@ -180,13 +180,13 @@ const EN = {
   runtime: 'Runtime',
   unknown: 'unknown',
   loadBad: 'Could not read the picture list',
-  patchTitle: 'Images in Chat',
+  patchTitle: 'QQ Image Paths',
   patchDesc: 'Sending a picture to the console Chat page needs two code patches in the install directory (the page renderer and the pet\'s event outlet). The updater overwrites them, so they are re-applied on every start; anything that fails shows up here.',
   patchWhere: 'Install dir',
   patchCount: 'Patches',
   patchAt: 'Checked',
   patchLastRestart: 'Last restart request',
-  patchAllDone: 'all 7 in place',
+  patchAllDone: 'in place',
   patchPending: 'applied, takes effect after restart',
   patchMissing: 'some are missing',
   patchNoApp: 'install directory not found',
@@ -196,7 +196,7 @@ const EN = {
   patchRepatch: 'Re-apply',
   patchRestore: 'Restore from backup',
   patchRestoreAsk: 'Restore the patches from backup?',
-  patchRestoreBody: 'Overwrites the three files with the updater-shipped originals (.coopanion-orig); the pet loses image sending after a console restart. Backups are kept, so you can re-apply any time.',
+  patchRestoreBody: 'Overwrites the QQ extension world.ts with the updater-shipped original (.coopanion-orig); QQ images fall back to extension-relative paths after a console restart. Backups are kept, so you can re-apply any time.',
   patchRestoreDone: 'Restored from backup',
   patchRestoreNone: 'Nothing changed: files were already pristine',
   patchRestoreBad: 'Restore failed',
@@ -207,7 +207,7 @@ const EN = {
   patchBackupSame: 'same as current file',
   patchRestart: 'Restart console',
   patchRestartAsk: 'Restart the console now?',
-  patchRestartBody: 'The console restarts by itself (a few seconds); a running conversation is cut off. The pet-side patch only loads on restart.',
+  patchRestartBody: 'The console restarts by itself (a few seconds); a running conversation is cut off. The QQ patch only loads on restart.',
   patchRestartSent: 'Restart requested, give it a few seconds',
   patchRestartBad: 'Restart request did not go through',
   patchRepatched: 'Checked again',
@@ -556,7 +556,7 @@ function statusPanel(ctx) {
 
   let currentDir = '';
 
-  /** 「对话页发图」补丁：7 处都在？这次补了几处？备份还在吗？要不要重启？ */
+  /** QQ 发图路径补丁：2 处都在？这次补了几处？备份还在吗？要不要重启？ */
   const renderPatch = (p) => {
     const total = Number(p?.total ?? 0);
     const done = Number(p?.done ?? 0);
@@ -573,7 +573,7 @@ function statusPanel(ctx) {
           ? tx.patchUnchecked
           : restored.length
             ? tx.patchRestored
-            : (pending ? tx.patchPending : `${tx.patchAllDone}`);
+            : (pending ? tx.patchPending : `${done}/${total} ${tx.patchAllDone}`);
     const tone = p?.error || failed.length || restored.length ? 'off' : 'on';
     patchHead.replaceChildren(ctx.ui.pill(label, tone));
     if (patched.length) patchHead.appendChild(ctx.ui.pill(`${tx.patchApplied} ${patched.length}`, 'on'));

@@ -38,14 +38,17 @@ const asText = (value) => (typeof value === 'string' ? value.trim() : '');
 const PACKAGE_DIR = resolve(fileURLToPath(new URL('..', import.meta.url)));
 
 // ---------------------------------------------------------------------------
-// 自愈补丁：安装目录里的两处代码每次启动都对一遍
+// 自愈补丁：QQ 扩展里的两处代码每次启动都对一遍
 // ---------------------------------------------------------------------------
 //
-// 桌宠要在控制台「对话」页发图，得改安装目录里的两份文件（客户端 bundle 的 say 渲染、
-// 桌宠包的 chat.ts/world.ts）。程序自动更新会把这些文件覆写回去，所以靠扩展模块的
-// 顶层代码每次启动重打一遍 —— `loadExtensions()` 无论世界开没开都会 import 本模块。
+// QQ 扩展的 `qq_send_image` / `qq_view_image` 只按扩展目录解析相对路径，这里把它们改成
+// 先按桌宠工作区（记忆目录）解析、扩展目录兜底。第三方包升级会把这些文件覆写回去，所以靠
+// 扩展模块的顶层代码每次启动重打一遍 —— `loadExtensions()` 无论世界开没开都会 import 本模块。
 //
-// 打好的补丁写回了磁盘，但桌宠包的 TS 是进程启动时 import 的，要重启进程才装载；
+// 0.3.0 起不再往桌宠包里打补丁（改用官方 `pet_say.images`）；早先版本打过的旧补丁会在启动时
+// 按 `.coopanion-orig` 备份还原回去。
+//
+// 打好的补丁写回了磁盘，但扩展的代码是进程启动时 import 的，要重启进程才装载；
 // 重启请求放在 `start()` 里（那时才拿得到控制台端口），并用状态文件防死循环。
 
 /** 最近一次补丁检查的结果；「状态」页显示它，也能手动重打或按备份还原。 */
@@ -58,6 +61,8 @@ let PATCH_STATE = {
   total: 0,
   stuck: false,
   restartPending: false,
+  /** 这次启动从桌宠包里还原掉的旧补丁文件（0.3.0 起才有）。 */
+  reverted: [],
   error: '',
   restart: null,
   /** 手动还原的记录：`{at, restored:[id], failed:[id], byFile:[{file,backup,state}]}`，没还原过就是 null。 */
@@ -77,10 +82,11 @@ function refreshPatchState({ stateDir, log } = {}) {
       .filter((r) => r.state === 'failed' || r.state === 'missing')
       .map((r) => ({ id: r.id, what: r.what, error: r.error ?? '' })),
     done: report.results.filter((r) => r.state === 'done').length,
-    // 可选补丁（第三方扩展没装）记 absent：不计进总数，免得状态页写「7/9 没打上」。
+    // 可选补丁（QQ 扩展没装）记 absent：不计进总数，免得状态页写「1/2 没打上」。
     total: report.results.filter((r) => r.state !== 'absent').length,
     stuck: report.stuck,
     restartPending: report.restartPending,
+    reverted: report.reverted?.filter((r) => r.reverted).map((r) => r.file) ?? [],
     error: report.error ?? '',
     restored: report.patched.length ? null : PATCH_STATE.restored,
   };
@@ -596,7 +602,7 @@ export class ImageWorld {
   }
 
   /**
-   * 重新对一遍「对话页发图」补丁。
+   * 重新对一遍「QQ 发图路径」补丁（顺带还原桌宠包上的旧补丁）。
    *
    * 平时用不着（每次启动都会自己打），留给两处：更新覆写后发现没打上，
    * 或者想看看到底改了哪几处。
@@ -611,10 +617,10 @@ export class ImageWorld {
   }
 
   /**
-   * 按 `.coopanion-orig` 手动还原：把安装目录里的三份文件覆盖回更新下发的原样。
+   * 按 `.coopanion-orig` 手动还原：把改过的文件覆盖回更新下发的原样。
    *
    * 备份不删，所以这是可逆的（再点「重打补丁」或下次启动就会补回来）。
-   * 还原后桌宠那一侧要重启才回到「没有发图功能」，但这里**不自动重启**
+   * 还原后 QQ 发图回到「只认扩展目录的相对路径」，要重启才生效；但这里**不自动重启**
    * ——用户是主动撤销的，等他自己决定。
    */
   #restore() {
@@ -809,7 +815,7 @@ export class ImageWorld {
     });
     if (PATCH_STATE.error) this.#host?.log?.warn?.(`图片工坊补丁:${PATCH_STATE.error}`);
     if (PATCH_STATE.failed.length) {
-      this.#host?.log?.warn?.(`图片工坊补丁:有 ${PATCH_STATE.failed.length} 处没打上(${PATCH_STATE.failed.map((f) => f.id).join(', ')}),桌宠发图可能不生效`);
+      this.#host?.log?.warn?.(`图片工坊补丁:有 ${PATCH_STATE.failed.length} 处没打上(${PATCH_STATE.failed.map((f) => f.id).join(', ')}),QQ 发图可能不认工作区相对路径`);
     }
     if (PATCH_STATE.restartPending) this.#scheduleRestart('这次启动补上了新补丁');
   }

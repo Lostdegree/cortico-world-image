@@ -7,7 +7,7 @@
  *   node tools/check.mjs
  */
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -16,7 +16,7 @@ import { inflateSync } from 'node:zlib';
 const here = fileURLToPath(new URL('.', import.meta.url));
 const pkgDir = join(here, '..');
 
-// 「对话页发图」的自愈补丁会在 import src/world.js 时跑；检查脚本不该改安装目录，
+// QQ 发图路径的自愈补丁会在 import src/world.js 时跑；检查脚本不该改安装目录，
 // 所以关掉它（补丁本身由 tools/patch.mjs 在副本上验证）。
 process.env.COOPANION_CHAT_IMAGE_PATCH = '0';
 
@@ -612,7 +612,7 @@ try {
   section('契约与自描述（框架 0.2）');
   const pkg = JSON.parse(readFileSync(join(pkgDir, 'package.json'), 'utf8'));
   const manifest = pkg.cortico ?? {};
-  check(/^0\.2\.\d+$/.test(pkg.version), 'version 在 0.2.x 线上', String(pkg.version));
+  check(/^0\.3\.\d+$/.test(pkg.version), 'version 在 0.3.x 线上', String(pkg.version));
   check(manifest.api === 6, 'cortico.api 是 6', String(manifest.api));
   check(manifest.webUiClient === 'dist/webui.js', 'webUiClient 指向 dist/webui.js', String(manifest.webUiClient));
   check(manifest.describe === 'describe.json', 'describe 指向 describe.json', String(manifest.describe));
@@ -746,22 +746,27 @@ try {
   await tick(20);
   check(status.state.toasts.some((t) => t.text.includes('没送到') || t.text.includes('检查模式')), '检查模式下点重启只是提示，不会真重启');
 
-  section('对话页发图补丁（纯逻辑）');
+  section('QQ 发图路径补丁（纯逻辑）');
   const patchMod = await import(pathToFileURL(join(pkgDir, 'src', 'chat-image-patch.js')).href);
-  for (const name of ['resolveAppRoot', 'patchSpecs', 'rulesFor', 'applyChatImagePatches', 'patchBackupStatus', 'restoreChatImagePatches', 'consolePort', 'requestConsoleRestart']) {
+  for (const name of ['resolveAppRoot', 'patchSpecs', 'rulesFor', 'applyChatImagePatches', 'patchBackupStatus', 'restoreChatImagePatches', 'revertObsoletePetPatches', 'consolePort', 'requestConsoleRestart']) {
     check(typeof patchMod[name] === 'function', `导出 ${name}()`);
   }
   const specs = patchMod.patchSpecs('X:/not-a-real-app');
   const specIds = specs.map((s) => s.id);
-  check(specIds.length === 9, '补丁一共 9 处（5 处打 world.ts + 2 处打 definition.ts + 2 处可选的 QQ 扩展）', String(specIds.length));
+  check(specIds.length === 2, '补丁一共 2 处，都在可选的 QQ 扩展上（桌宠包从 0.3.0 起不再打补丁）', String(specIds.length));
   check(new Set(specIds).size === specIds.length, '补丁 id 不重复', specIds.join(','));
-  const wantIds = ['pet-fs-import', 'pet-path-import', 'pet-show-image-tool', 'pet-workspace-option', 'pet-workspace-relpaths', 'pet-workspace-wire', 'pet-show-image-describe', 'qq-image-relpaths', 'qq-image-hints'];
-  check(wantIds.every((id) => specIds.includes(id)), '9 处补丁 id 齐全', specIds.join(','));
+  const wantIds = ['qq-image-relpaths', 'qq-image-hints'];
+  check(wantIds.every((id) => specIds.includes(id)), '两处补丁 id 齐全', specIds.join(','));
   check(specIds.every((id) => wantIds.includes(id)), '没有多余的补丁 id', specIds.join(','));
   // 防回归：框架 0.1.23 起原生就能把 say 的图发到对话页（chat.ts 的 wireImages() + 客户端 chat-thumb 缩略图），
-  // 这 4 处补丁已经删掉，不许再回来（锚点早就不匹配，留着只会每次启动都记一条失败）。
-  for (const gone of ['client-say-images', 'pet-say-images', 'pet-record-blobs', 'pet-say-type']) {
-    check(!specIds.includes(gone), `补丁 ${gone} 已删掉（框架原生已覆盖），不许再出现`, specIds.join(','));
+  // 0.2.0 起 pet_say 自己收 images 句柄，0.3.0 起本扩展连 pet_show_image 都不再注入 ——
+  // 这些补丁都已经删掉，不许再回来（锚点早就不匹配，留着只会每次启动都记一条失败）。
+  for (const gone of [
+    'client-say-images', 'pet-say-images', 'pet-record-blobs', 'pet-say-type',
+    'pet-fs-import', 'pet-path-import', 'pet-show-image-tool', 'pet-workspace-option',
+    'pet-workspace-relpaths', 'pet-workspace-wire', 'pet-show-image-describe',
+  ]) {
+    check(!specIds.includes(gone), `补丁 ${gone} 已删掉，不许再出现`, specIds.join(','));
   }
   for (const spec of specs) check(typeof spec.what === 'string' && spec.what.length > 4, `补丁 ${spec.id} 有说明`, spec.what);
   const qqSpecs = specs.filter((s) => s.id.startsWith('qq-'));
@@ -816,101 +821,39 @@ try {
   check(Boolean(hintRules.apply('export const nope = 1;\n')?.error), '一句都认不出来时仍然报失败');
   check(!hintRules.done('export const nope = 1;\n'), '文件整个换了写法时不谎报「已打过」');
 
-  // pet_show_image 也要能认相对路径（按桌宠工作区解析）。
-  const petSpecs = specs.filter((s) => s.id.startsWith('pet-workspace-'));
-  check(petSpecs.length === 3 && petSpecs.every((s) => s.optional !== true), '桌宠工作区相对路径那 3 处是必备补丁', JSON.stringify(petSpecs.map((s) => s.id)));
-  check(petSpecs.filter((s) => s.id !== 'pet-workspace-wire').every((s) => s.file.endsWith('world.ts')) && petSpecs.find((s) => s.id === 'pet-workspace-wire').file.endsWith('definition.ts'), '前两处打 world.ts、接线那处打 definition.ts', JSON.stringify(petSpecs.map((s) => `${s.id}:${s.file.endsWith('definition.ts') ? 'definition.ts' : 'world.ts'}`)));
-  const petFixture = [
-    "import { existsSync } from 'node:fs';",
-    "import { isAbsolute, join } from 'node:path';",
-    'export interface DesktopPetWorldOptions {',
-    '  avatarFile?: string;',
-    '  controls?: unknown;',
-    '}',
-    'export class DesktopPetWorld {',
-    '  private opts: DesktopPetWorldOptions = {};',
-    '  showImage(args: { path?: string }) {',
-    "    const raw = typeof args.path === 'string' ? args.path.trim() : '';",
-    "    if (!raw) return { text: '[pet_show_image 没执行] 要给图片的完整路径。', failed: true };",
-    "    if (!isAbsolute(raw)) return { text: '[pet_show_image 没执行] 需要完整路径(例如 C:\\\\Users\\\\...\\\\pic.png)。', failed: true };",
-    "    const caption = typeof args.caption === 'string' ? args.caption.trim() : '';",
-    "    if (!/\\\\.(png|jpe?g|gif|webp)$/i.test(raw)) return { text: '不是图片', failed: true };",
-    "    description: '图片文件的完整路径。',",
-    '    return { raw, caption };',
-    '  }',
-    '}',
-    '',
-  ].join('\n');
-  const fixtureDone = 'raw = join(ws, raw);';
-  check(!petFixture.includes(fixtureDone), '夹具本身就是「只认绝对路径」的原文（自测有东西可改）');
-  const petOpt = patchMod.rulesFor('pet-workspace-option');
-  check(typeof petOpt?.done === 'function' && typeof petOpt?.apply === 'function', 'pet-workspace-option 有 done/apply');
-  check(Boolean(petOpt.apply('export const nope = 1;\n')?.error), '桌宠世界选项换了写法就报失败，不瞎改');
-  const optPatched = petOpt.apply(petFixture);
-  check(!optPatched?.error && optPatched.text.includes('workspaceDir?: () => string;') && optPatched.text.includes('avatarFile?: string;'), '世界选项里补上 workspaceDir（原字段不动）', optPatched?.error ?? '');
-  check(petOpt.done(optPatched?.text ?? ''), '补完认成「已打过」（幂等）');
-  const petRel = patchMod.rulesFor('pet-workspace-relpaths');
-  check(Boolean(petRel.apply('export const nope = 1;\n')?.error), 'pet_show_image 换了写法就报失败，不瞎改');
-  const relPatched = petRel.apply(petFixture);
-  check(!relPatched?.error && relPatched.text.includes('    let raw = typeof args.path'), '路径那行改成 let（const 拼不上）', relPatched?.error ?? '');
-  check(!relPatched?.error && relPatched.text.includes("const ws = (this.opts.workspaceDir?.() ?? '').trim();") && relPatched.text.includes('      raw = join(ws, raw);'), '相对路径拼到桌宠工作区上', relPatched?.error ?? '');
-  check(!relPatched?.error && relPatched.text.includes("相对路径没有工作区可拼") && !relPatched.text.includes('需要完整路径(例如'), '没给工作区时仍报错，但换成「没有工作区可拼」');
-  check(!relPatched?.error && relPatched.text.includes("description: '图片路径:绝对路径,或相对桌宠工作区的路径(例如 blobs/xx.jpg)。'"), '工具说明改成「绝对路径或相对工作区」');
-  check(petRel.done(relPatched?.text ?? ''), '改完认成「已打过」（幂等）');
-  const petWire = patchMod.rulesFor('pet-workspace-wire');
-  check(Boolean(petWire.apply('export const nope = 1;\n')?.error), '装配层换了写法就报失败，不瞎改');
-  const wireFixture = ['export function makeWs(ctx: Ctx) {', '  return {', '        avatarFile: join(ctx.botDir, AVATAR_FILE),', '  };', '}', ''].join('\n');
-  const wirePatched = petWire.apply(wireFixture);
-  check(!wirePatched?.error && wirePatched.text.includes("workspaceDir: () => join(ctx.botDir, 'workspace'),"), '装配层把桌宠工作区传下去', wirePatched?.error ?? '');
-  check(wirePatched.text.indexOf('workspaceDir:') > wirePatched.text.indexOf('avatarFile:'), '接在 avatarFile 后面（不动别的行）');
-  check(petWire.done(wirePatched?.text ?? ''), '接线补完认成「已打过」（幂等）');
-
-  // 框架 0.2 起每次启动都拿运行时的工具名核对 describe.tools，对不上就记
-  // `worlds.desktop-pet: 工具不在 describe.tools 里,照常生效`（undeclared-names.ts）。
-  // pet_show_image 是本扩展注入的，得补进桌宠包的自描述。
-  const petDescribe = patchMod.rulesFor('pet-show-image-describe');
-  check(typeof petDescribe?.done === 'function' && typeof petDescribe?.apply === 'function', 'pet-show-image-describe 有 done/apply');
-  check(specs.find((s) => s.id === 'pet-show-image-describe')?.file.endsWith('definition.ts'), '自描述那处补丁打在装配层 definition.ts', JSON.stringify(specs.find((s) => s.id === 'pet-show-image-describe')));
-  check(Boolean(petDescribe.apply('export const nope = 1;\n')?.error), '桌宠自描述换了写法就报失败，不瞎改');
-  // 0.2.1 的桌宠包在数组里多了一段 `...CUA_OFF_TOOL_DECLS`——夹具按当前真实写法来，另配一份多行写法。
-  const describeFixture = [
-    "import { describeTools, type WorldDescribe } from 'cortico/world.ts';",
-    'const DESCRIBE: WorldDescribe = {',
-    '  tools: describeTools([...petToolDecls(), ...CUA_OFF_TOOL_DECLS, ...CUA_TOOL_DECLS], {',
-    "    pet_say: { zh: '说话', en: 'talks' },",
-    '  }),',
-    '  events: [],',
-    '};',
-    '',
-  ].join('\n');
-  check(!petDescribe.done(describeFixture), '夹具是没补过 pet_show_image 的自描述（有东西可补）');
-  const described = petDescribe.apply(describeFixture);
-  check(!described?.error, '自描述里补上 pet_show_image（数组里多一段 spread 也认）', String(described?.error ?? 'ok'));
-  check((described?.text ?? '').includes("      name: 'pet_show_image',") && (described?.text ?? '').includes("      tags: ['act'],"), '条目带名字与 tags（和工具表一致）');
-  check((described?.text ?? '').includes("    pet_show_image: { zh: '把本机的一张图片贴到「对话」页"), '也补了中英一句话（summary）');
-  check((described?.text ?? '').includes('    pet_say: { zh: ') && (described?.text ?? '').includes('...CUA_TOOL_DECLS,') && (described?.text ?? '').includes('  events: [],'), '原有的 summary / 事件声明原样保留');
-  check((described?.text ?? '').includes('...CUA_OFF_TOOL_DECLS,'), '数组里原有的 spread 一个不少');
-  check(petDescribe.done(described?.text ?? ''), '补完认成「已打过」（幂等）');
-  check(petDescribe.apply(described?.text ?? '')?.text === described?.text, '已经打过再 apply 不改动（runner 之外调用也安全）');
-  const multilineFixture = [
-    'const DESCRIBE: WorldDescribe = {',
-    '  tools: describeTools(',
-    '    [...petToolDecls(), ...CUA_TOOL_DECLS],',
-    '    {',
-    "      pet_say: { zh: '说话', en: 'talks' },",
-    '    },',
-    '  ),',
-    '  events: [],',
-    '};',
-    '',
-  ].join('\n');
-  const multiline = petDescribe.apply(multilineFixture);
-  check(!multiline?.error && (multiline?.text ?? '').includes("name: 'pet_show_image',"), '多行写法也补得上（上游换排版不至于失效）', String(multiline?.error ?? 'ok'));
+  // 0.3.0 起不再往桌宠包里打补丁（改用官方 pet_say.images）；早先版本打进去的旧补丁
+  // 靠 revertObsoletePetPatches() 按 .coopanion-orig 还原成上游原样。
+  const petWork = mkdtempSync(join(tmpdir(), 'image-revert-'));
+  const petApp = join(petWork, 'resources', 'app');
+  const petSrc = join(petApp, 'node_modules', 'cortico-world-desktop-pet', 'src');
+  mkdirSync(petSrc, { recursive: true });
+  mkdirSync(join(petApp, 'build', 'cortico', 'src'), { recursive: true });
+  writeFileSync(join(petApp, 'build', 'cortico', 'src', 'paths.ts'), 'export {};\n');
+  const petPristine = 'export const tools = () => [];\n';
+  const petFile = join(petSrc, 'world.ts');
+  const petBackup = `${petFile}.coopanion-orig`;
+  writeFileSync(petFile, `${petPristine}/* coopanion-chat-image: 旧补丁 */\n`);
+  writeFileSync(petBackup, petPristine);
+  const reverted = patchMod.revertObsoletePetPatches(petApp, {});
+  check(reverted.length === 1 && reverted[0].reverted === true, '带我们标记的桌宠文件被还原', JSON.stringify(reverted));
+  check(readFileSync(petFile, 'utf8') === petPristine, '还原内容就是 .coopanion-orig 那份原文');
+  check(patchMod.revertObsoletePetPatches(petApp, {}).length === 0, '还原过就不再有可还原的文件（幂等）');
+  writeFileSync(petFile, `${petPristine}// 桌宠包自己升过级，我们的标记已经没了\n`);
+  writeFileSync(petBackup, petPristine);
+  check(patchMod.revertObsoletePetPatches(petApp, {}).length === 0, '文件里没有我们的标记时一律不动');
+  check(readFileSync(petFile, 'utf8').includes('桌宠包自己升过级'), '没标记的文件原样留着');
+  rmSync(petBackup, { force: true });
+  writeFileSync(petFile, `${petPristine}/* coopanion-chat-image */\n`);
+  check(patchMod.revertObsoletePetPatches(petApp, {}).length === 0, '没有备份可还原时不动（不猜）');
+  // 没装 QQ 扩展：两处可选补丁都 absent，不算失败、也不请求重启。
+  const noQq = patchMod.applyChatImagePatches(petApp, {});
+  check(noQq.failed.length === 0 && noQq.results.every((r) => r.state === 'absent'), '没装 QQ 扩展时两处可选补丁记 absent，不算失败', JSON.stringify(noQq.results.map((r) => `${r.id}:${r.state}`)));
+  check(!noQq.restartPending, '没装 QQ 扩展时不请求重启');
+  rmSync(petWork, { recursive: true, force: true });
 
   const portWork = mkdtempSync(join(tmpdir(), 'image-port-'));
   mkdirSync(join(portWork, 'resources', 'app'), { recursive: true });
   mkdirSync(join(portWork, 'data', 'home', 'companion'), { recursive: true });
-  const { writeFileSync } = await import('node:fs');
   writeFileSync(join(portWork, 'data', 'home', 'companion', 'config.json'), JSON.stringify({ web: { port: 18099 } }));
   check(patchMod.consolePort({ appRoot: join(portWork, 'resources', 'app') }) === 18099, '端口从 <安装>/data/home/companion/config.json 读出来');
   check(patchMod.consolePort({ appRoot: join(portWork, 'resources', 'app'), explicit: 12345 }) === 12345, '显式端口优先');
@@ -922,7 +865,7 @@ try {
   check(String(bogus.error ?? '').includes('resources/app'), '失败原因说清是哪个目录', String(bogus.error));
   check(!bogus.restartPending, '没打上就不请求重启');
 
-  section('对话页发图补丁（接线）');
+  section('QQ 发图路径补丁（接线）');
   const worldSrc = readFileSync(join(pkgDir, 'src', 'world.js'), 'utf8');
   const patchSrc = readFileSync(join(pkgDir, 'src', 'chat-image-patch.js'), 'utf8');
   check(worldSrc.includes("from './chat-image-patch.js'"), 'world.js 引了补丁模块');
@@ -934,7 +877,7 @@ try {
   check(worldSrc.includes('backups: patchBackupStatus('), '状态里带上每处补丁的备份现状');
   check(patchSrc.includes('restoreChatImagePatches') && patchSrc.includes('patchBackupStatus'), '补丁模块导出还原与备份查询');
   for (const id of wantIds) check(patchSrc.includes(`'${id}'`), `补丁模块里有 ${id}`);
-  check(patchSrc.includes('cortico-world-desktop-pet'), '补丁认的是桌宠包目录');
+  check(patchSrc.includes('cortico-world-desktop-pet'), '还认得桌宠包目录（只用来还原旧补丁）');
 
   const patched = await world.invoke('status', 'repatch', []);
   check(patched?.packageDir === pkgDir, 'repatch 回结果里带扩展目录', String(patched?.packageDir));
@@ -945,8 +888,8 @@ try {
   check(Array.isArray(restored?.restored?.restored) && String(restored?.restored?.skipped ?? '').includes('COOPANION_CHAT_IMAGE_PATCH'), '检查模式下 restore 不动安装目录', JSON.stringify(restored?.restored));
   const st = await world.invoke('status', 'state', []);
   check(Array.isArray(st?.patch?.backups), '状态里能读到备份列表', JSON.stringify(st?.patch?.backups));
-  const badge = (world.webUi('zh').badges ?? []).find((b) => b.label === '发图补丁');
-  check(!!badge, '控制台徽章里有「发图补丁」');
+  const badge = (world.webUi('zh').badges ?? []).find((b) => b.label === 'QQ 发图路径');
+  check(!!badge, '控制台徽章里有「QQ 发图路径」');
   check(badge?.value === '未检查', '检查模式下徽章显示「未检查」', String(badge?.value));
 
   section('未知方法与面板');
