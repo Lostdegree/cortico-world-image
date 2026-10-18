@@ -41,9 +41,13 @@ const PACKAGE_DIR = resolve(fileURLToPath(new URL('..', import.meta.url)));
 // 自愈补丁：QQ 扩展里的两处代码每次启动都对一遍
 // ---------------------------------------------------------------------------
 //
-// QQ 扩展的 `qq_send_image` / `qq_view_image` 只按扩展目录解析相对路径，这里把它们改成
-// 先按桌宠工作区（记忆目录）解析、扩展目录兜底。第三方包升级会把这些文件覆写回去，所以靠
-// 扩展模块的顶层代码每次启动重打一遍 —— `loadExtensions()` 无论世界开没开都会 import 本模块。
+// 这里只给**旧版**第三方 QQ 扩展（`cortico-world-qq-better-alont1`，world `qqbot`）打补丁：
+// 它的 `qq_send_image` / `qq_view_image` 只按扩展目录解析相对路径，这里改成先按桌宠工作区
+// （记忆目录）解析、扩展目录兜底。第三方包升级会把这些文件覆写回去，所以靠扩展模块的顶层
+// 代码每次启动重打一遍 —— `loadExtensions()` 无论世界开没开都会 import 本模块。
+//
+// 官方 `cortico-world-qq`（world `qq`）发图收的是 blob 句柄（`host.blob(...)`），根本不解析
+// 本地路径，用不着补丁；切到它之后 `worlds.qqbot.enabled=false`，这两处会自动记 absent、不碰文件。
 //
 // 0.3.0 起不再往桌宠包里打补丁（改用官方 `pet_say.images`）；早先版本打过的旧补丁会在启动时
 // 按 `.coopanion-orig` 备份还原回去。
@@ -82,8 +86,10 @@ function refreshPatchState({ stateDir, log } = {}) {
       .filter((r) => r.state === 'failed' || r.state === 'missing')
       .map((r) => ({ id: r.id, what: r.what, error: r.error ?? '' })),
     done: report.results.filter((r) => r.state === 'done').length,
-    // 可选补丁（QQ 扩展没装）记 absent：不计进总数，免得状态页写「1/2 没打上」。
+    // 可选补丁（QQ 扩展没装、或那个世界没开）记 absent：不计进总数，免得状态页写「1/2 没打上」。
     total: report.results.filter((r) => r.state !== 'absent').length,
+    // 切到官方 QQ 扩展后一处都不用打：状态页据此显示「没有要打补丁的 QQ 扩展」。
+    skipped: report.results.filter((r) => r.state === 'absent').length,
     stuck: report.stuck,
     restartPending: report.restartPending,
     reverted: report.reverted?.filter((r) => r.reverted).map((r) => r.file) ?? [],
@@ -454,7 +460,7 @@ export class ImageWorld {
     if (spec.note) lines.push(`名字：${spec.note}`);
     if (spec.prompt) lines.push(`画面：${spec.prompt}`);
     if (spec.warning) lines.push(spec.warning);
-    lines.push('图已进入本次对话，也显示在「图片工坊」页。要发给某人或某个群，把上面的绝对路径交给 qq_send_image。');
+    lines.push('图已进入本次对话，也显示在「图片工坊」页。要发给某人或某个群，就把上面那行 `[blob …]` 的句柄交给那个世界的发图工具（官方 QQ 扩展是 `qq_draft` 的 `image`；旧版 QQ 扩展是 `qq_send_image`，填文件绝对路径）。');
     return {
       text: lines.join('\n'),
       blobs: [{

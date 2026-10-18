@@ -192,11 +192,35 @@ const hintNeedsWork = (text, h) => !text.includes(h.to) && [].concat(h.from).som
 export function patchSpecs(appRoot) {
   const qq = qqWorldFile(appRoot);
   const specs = [
-    // 这两处落在第三方 QQ 扩展上：没装就记 absent（不算失败），装了才改。
-    { id: 'qq-image-relpaths', file: qq, what: 'QQ 发图/看图认工作区相对路径', optional: true },
-    { id: 'qq-image-hints', file: qq, what: 'QQ 发图/看图的说明写明相对工作区', optional: true },
+    // 这两处落在第三方 QQ 扩展（qq-better）上：没装、或那个世界没开，就记 absent（不算失败）。
+    // 官方 `cortico-world-qq` 发图按 blob 句柄，不解析本地路径，用不着补丁。
+    { id: 'qq-image-relpaths', file: qq, what: 'QQ 发图/看图认工作区相对路径', optional: true, worldId: 'qqbot' },
+    { id: 'qq-image-hints', file: qq, what: 'QQ 发图/看图的说明写明相对工作区', optional: true, worldId: 'qqbot' },
   ];
   return specs;
+}
+
+/**
+ * 宿主配置里那个世界开没开（`worlds.<id>.enabled`）。
+ *
+ * 补丁改的是某个第三方扩展的源码：那个世界没在跑，改了也只是给一份不加载的文件留个备份，
+ * 状态页还会写「2 处都在」——看起来像在维护一个根本不生效的东西。所以这里读一下开关。
+ * 配置读不到时返回 `{ known: false, enabled: true }`：不猜，照旧打补丁。
+ */
+export function worldSwitch(appRoot, worldId) {
+  if (!worldId) return { known: false, enabled: true };
+  const files = [];
+  if (appRoot) files.push(join(dirname(dirname(resolve(appRoot))), 'data', 'home', 'companion', 'config.json'));
+  files.push(join(process.cwd(), 'data', 'home', 'companion', 'config.json'));
+  for (const file of files) {
+    try {
+      const world = JSON.parse(readFileSync(file, 'utf8'))?.worlds?.[worldId];
+      if (world && typeof world === 'object') return { known: true, enabled: world.enabled !== false };
+    } catch {
+      // 读不到就试下一个。
+    }
+  }
+  return { known: false, enabled: true };
 }
 
 /** 一处补丁的改写规则（拆出来是为了能在副本上单测）。 */
@@ -311,6 +335,21 @@ export function applyChatImagePatches(appRoot, { stateDir, log } = {}) {
     const rules = rulesFor(spec.id);
     const name = spec.file ? basename(spec.file) : '(没找到)';
     const backup = spec.file ? `${spec.file}.coopanion-orig` : '';
+    // 那个世界没在跑：不改它的文件（换了官方 QQ 扩展时就是这种情形）。
+    const sw = worldSwitch(appRoot, spec.worldId);
+    if (sw.known && !sw.enabled) {
+      results.push({
+        id: spec.id,
+        what: spec.what,
+        file: spec.file,
+        backup,
+        state: 'absent',
+        optional: Boolean(spec.optional),
+        worldId: spec.worldId,
+        error: `${spec.id}: 世界「${spec.worldId}」没启用(worlds.${spec.worldId}.enabled=false)，跳过`,
+      });
+      continue;
+    }
     if (!spec.file || !existsSync(spec.file)) {
       const gone = spec.optional ? 'absent' : 'missing';
       results.push({
@@ -388,6 +427,8 @@ export function patchBackupStatus(appRoot) {
   const out = [];
   if (!appRoot || !looksLikeApp(appRoot)) return out;
   for (const spec of patchSpecs(appRoot)) {
+    const sw = worldSwitch(appRoot, spec.worldId);
+    if (sw.known && !sw.enabled) continue;
     const backup = spec.file ? `${spec.file}.coopanion-orig` : '';
     const hasFile = Boolean(spec.file && existsSync(spec.file));
     // 可选的第三方扩展没装：整行不出现（状态页按行数算「已打 n/总数」）。

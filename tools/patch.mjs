@@ -103,6 +103,13 @@ function makeFakeApp(root, { qqText = QQ_FIXTURE } = {}) {
   return { app, petDir, qq };
 }
 
+/** 让副本里也能有宿主配置（`worlds.<id>.enabled`）——补丁只为开着的世界打。 */
+function writeWorldSwitch(app, worlds) {
+  const dir = join(app, '..', '..', 'data', 'home', 'companion');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'config.json'), `${JSON.stringify({ web: { port: 17788 }, worlds }, null, 2)}\n`);
+}
+
 function selfTest() {
   const work = mkdtempSync(join(tmpdir(), 'image-patch-'));
   try {
@@ -113,6 +120,7 @@ function selfTest() {
     ok(ids.includes('qq-image-relpaths') && ids.includes('qq-image-hints'), '两处都是 QQ 扩展的', ids.join(','));
     ok(specs.every((s) => s.optional === true), '两处都是可选补丁（没装 QQ 扩展不算失败）');
     ok(specs.every((s) => s.file.includes(QQ_PKG) && s.file.endsWith('world.ts')), '都落在 QQ 扩展的 src/world.ts', JSON.stringify(specs.map((s) => s.file)));
+    ok(specs.every((s) => s.worldId === 'qqbot'), '两处都挂在 world「qqbot」上（切到官方 QQ 扩展后自动跳过）', JSON.stringify(specs.map((s) => s.worldId)));
     ok(specs.every((s) => typeof s.what === 'string' && s.what.length > 4), '每处都有说明');
 
     head('改写规则（单文件）');
@@ -189,6 +197,23 @@ function selfTest() {
     ok(rev.restartPending === true, '还原也算「这次改了东西」→ 请求重启');
     const revAgain = applyChatImagePatches(a4.app, { stateDir: join(work, 'state4') });
     ok(revAgain.reverted.every((r) => !r.reverted), '还原过一次之后不再重复还原');
+
+    head('世界没开时跳过（切到官方 QQ 扩展）');
+    const a5 = makeFakeApp(join(work, 'run5'));
+    writeWorldSwitch(a5.app, { qqbot: { enabled: false }, qq: { enabled: true } });
+    const off = applyChatImagePatches(a5.app, { stateDir: join(work, 'state5') });
+    ok(off.results.length === 2 && off.results.every((r) => r.state === 'absent'), 'qqbot 关掉时两处都记 absent', JSON.stringify(off.results.map((r) => `${r.id}:${r.state}`)));
+    ok(off.results.every((r) => /worlds\.qqbot\.enabled=false/.test(r.error ?? '')), 'absent 里写明是「世界没开」', JSON.stringify(off.results.map((r) => r.error)));
+    ok(!readFileSync(a5.qq, 'utf8').includes('resolveLocalImagePath'), '文件一个字节都没动');
+    ok(!existsSync(`${a5.qq}.coopanion-orig`), '也不会平白留一份备份');
+    ok(off.restartPending === false, '不请求重启');
+    ok(patchBackupStatus(a5.app).length === 0, '状态页的备份行也不显示它');
+
+    const a6 = makeFakeApp(join(work, 'run6'));
+    writeWorldSwitch(a6.app, { qqbot: { enabled: true } });
+    const on = applyChatImagePatches(a6.app, { stateDir: join(work, 'state6') });
+    ok(on.patched.length === 2, 'qqbot 开着时照常打上', JSON.stringify(on.results.map((r) => `${r.id}:${r.state}`)));
+    ok(patchBackupStatus(a6.app).length === 2, '开着时备份状态两行');
 
     head('控制台端口');
     const cfgApp = join(work, 'port');

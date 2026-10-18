@@ -772,6 +772,24 @@ try {
   const qqSpecs = specs.filter((s) => s.id.startsWith('qq-'));
   check(qqSpecs.length === 2 && qqSpecs.every((s) => s.optional === true), 'QQ 扩展那两处是可选补丁（没装就不算失败）', JSON.stringify(qqSpecs.map((s) => ({ id: s.id, optional: s.optional }))));
   check(qqSpecs.every((s) => s.file.includes('data') && s.file.includes('cortico-world-qq-better-alont1') && s.file.endsWith('world.ts')), 'QQ 补丁落在 <安装>/data/extensions/…/src/world.ts', JSON.stringify(qqSpecs.map((s) => s.file)));
+  // 补丁只为「正在跑的那个世界」打：切到官方 QQ 扩展（world qq）后 qqbot 关掉，两处该自动跳过。
+  check(qqSpecs.every((s) => s.worldId === 'qqbot'), '两处补丁都挂在 world「qqbot」上（旧版 QQ 扩展）', JSON.stringify(qqSpecs.map((s) => s.worldId)));
+  check(typeof patchMod.worldSwitch === 'function', '导出 worldSwitch()');
+  const swUnknown = patchMod.worldSwitch('X:/not-a-real-app', 'qqbot');
+  check(swUnknown.known === false && swUnknown.enabled === true, '读不到宿主配置时不猜，照旧打补丁', JSON.stringify(swUnknown));
+  const swDir = mkdtempSync(join(tmpdir(), 'image-switch-'));
+  try {
+    mkdirSync(join(swDir, 'data', 'home', 'companion'), { recursive: true });
+    writeFileSync(join(swDir, 'data', 'home', 'companion', 'config.json'), JSON.stringify({ worlds: { qqbot: { enabled: false }, qq: { enabled: true } } }));
+    const swOff = patchMod.worldSwitch(join(swDir, 'resources', 'app'), 'qqbot');
+    check(swOff.known === true && swOff.enabled === false, 'qqbot 关掉时 worldSwitch 认成「没启用」', JSON.stringify(swOff));
+    const swOn = patchMod.worldSwitch(join(swDir, 'resources', 'app'), 'qq');
+    check(swOn.known === true && swOn.enabled === true, 'qq（官方）开着时 worldSwitch 认成「启用」', JSON.stringify(swOn));
+    const swMissing = patchMod.worldSwitch(join(swDir, 'resources', 'app'), 'nope');
+    check(swMissing.known === false, '配置里没这个世界就当不知道', JSON.stringify(swMissing));
+  } finally {
+    rmSync(swDir, { recursive: true, force: true });
+  }
   const qqRules = patchMod.rulesFor('qq-image-relpaths');
   check(typeof qqRules?.done === 'function' && typeof qqRules?.apply === 'function', 'QQ 补丁有 done/apply');
   const qqStranger = qqRules.apply('export const nope = 1;\n');

@@ -7,8 +7,10 @@
 
 > **性质说明**：这是给 Coopanion 写的**非官方**扩展，走的是框架公开的扩展接口
 > （`kind: world` + `webUiClient` 面板 + 必需的 `describe.json` 自描述）。唯一伸手动别人的地方是「QQ 发图路径」
-> 那两处可选补丁——它按锚点改写**第三方 QQ 扩展**的 `src/world.ts`，改之前留一份
+> 那两处可选补丁——它按锚点改写**第三方 QQ 扩展**（`cortico-world-qq-better-alont1`）的 `src/world.ts`，改之前留一份
 > `.coopanion-orig` 备份，程序自动更新覆写后会自己补回来（细节与还原方式见那一节）。
+> 补丁只给**正在用的那个 QQ 扩展**打：读 `<安装>\data\home\companion\config.json`，
+> `worlds.qqbot.enabled` 不是 `true`（比如已经切到官方 `cortico-world-qq`）就整段跳过，一个字节都不碰。
 > **桌宠包本身完全不碰**：0.3.0 起改用官方的 `pet_say.images`，早先版本打进去的旧补丁会被自动还原。
 > 不愿意让脚本动那个第三方包，就把 QQ 扩展的补丁关掉（它认不出原文只会记一条失败，不会硬改）。
 >
@@ -101,6 +103,11 @@ pet_say({ script: '看，画好了。', images: ['<句柄>'] })  // 气泡里说
 `world.ts` 记 `absent`（没装这个扩展不算失败、不进总数），认不出它原来的写法记 `failed` 并且
 **不动那个文件**，原文备份同样是 `world.ts.coopanion-orig`。改的是 TS 源码，**要重启才生效**。
 
+**切到别的 QQ 扩展就自动让路**：每个补丁都标了它服务的世界 id（`worldId: 'qqbot'`），
+应用时会读 `<安装>\data\home\companion\config.json` 的 `worlds.qqbot.enabled`——
+不是 `true`（例如官方 `cortico-world-qq` 顶替了它）就整段跳过，两处都记 `absent`、文件一个字节不动、
+不请求重启，状态页这张卡片也不显示备份行（0.3.1 起）。读不到配置时**不猜**，照旧检查并打补丁。
+
 ### 自愈怎么工作
 
 扩展模块的顶层代码**每次启动都会跑**（`loadExtensions()` 无差别 import 所有已装扩展，与
@@ -109,7 +116,7 @@ pet_say({ script: '看，画好了。', images: ['<句柄>'] })  // 气泡里说
 1. 启动时先**还原**桌宠包上早先版本留下的旧补丁（0.3.0 起不再注入），再检查 QQ 扩展那两处；
    如果这次真的改了文件，状态文件里记 `requested: true`，并在 4 秒后
    `POST http://127.0.0.1:<web.port>/api/run/restart` 请控制台重启一次（QQ 扩展的 TS 源码要重启才装载）；
-2. 重启后再跑：文件已经是对的样子 → 2 处全部 `done`（没装 QQ 扩展时两处都是 `absent`）→ 不再请求重启（**不会反复重启**）；
+2. 重启后再跑：文件已经是对的样子 → 2 处全部 `done`（没装 QQ 扩展、或 `worlds.qqbot` 没启用时两处都是 `absent`）→ 不再请求重启（**不会反复重启**）；
 3. 程序自动更新（或 QQ 扩展升级）把文件覆写回原样 → 下一轮启动又补上，再重启一次，回到第 2 步；
 4. 万一「已经请求过重启，这次还是缺」——说明补丁根本落不到进程真正加载的那份文件上，
    这时记 `stuck`，**故意不再重启**（防死循环），并在「状态」页把 `id — 原因` 列出来给人看。
@@ -160,9 +167,9 @@ pet_say({ script: '看，画好了。', images: ['<句柄>'] })  // 气泡里说
 修法是抬版本 + 重启，主程序会在 Core 就绪时自动重载控制台外壳（
 `resources\app\app\main.cjs:285` `if (settings) settings.loadURL(consoleUrl());`）：
 
-1. 把 `package.json` 的 `version` 抬一格（例如 `0.3.0` → `0.3.1`）；
+1. 把 `package.json` 的 `version` 抬一格（例如 `0.3.1` → `0.3.2`）；
 2. 重启控制台（状态页「重启控制台」或 `node tools/patch.mjs --restart`）；
-3. 程序内窗口自动重载 → 新的 URL `/assets/extensions/cortico-world-image/0.3.0/webui.js`
+3. 程序内窗口自动重载 → 新的 URL `/assets/extensions/cortico-world-image/0.3.1/webui.js`
    取到新脚本，旧 URL 立刻变 404。
 
 不想抬版本也行，但要**先完全退出程序**再删缓存目录：`<安装>\data\Cache`、
@@ -198,7 +205,7 @@ registry 上有版本时直接从 npm 装；想自己改代码、或者 `npm vie
 或者用命令行，在 `data/extensions` 目录里（`extensions/package.json` 所在处）执行：
 
 ```powershell
-pnpm add cortico-world-image --ignore-workspace        # 想钉住版本就写 cortico-world-image@0.3.0
+pnpm add cortico-world-image --ignore-workspace        # 想钉住版本就写 cortico-world-image@0.3.1
 ```
 
 装完重启。升级同理：重跑一遍（控制台的「扩展」页会显示已装版本与最新版本），装完同样要重启。
@@ -224,7 +231,7 @@ pnpm add "D:\path\to\cortico-world-image" --ignore-workspace
 
 **装完必须重启 Coopanion**：扩展是 ESM 模块，进程内不会重新加载。重启后在
 `config.json` 的 `worlds.image.enabled` 上打开（控制台里也有这个开关），四个工具才会挂给桌宠。
-同一轮启动里，扩展还会把 QQ 发图路径那 2 处补丁检查一遍（没装 QQ 扩展就跳过），缺了就补、并自己请控制台重启一次；
+同一轮启动里，扩展还会把 QQ 发图路径那 2 处补丁检查一遍（没装 QQ 扩展、或已切到别的 QQ 扩展就跳过），缺了就补、并自己请控制台重启一次；
 桌宠包上早先版本留下的旧补丁会在同一轮里被还原成上游原样
 （详见上一节）。
 

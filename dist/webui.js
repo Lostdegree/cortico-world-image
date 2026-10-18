@@ -85,12 +85,13 @@ const ZH = {
   unknown: '未知',
   loadBad: '读不到作品列表',
   patchTitle: 'QQ 发图路径',
-  patchDesc: 'QQ 扩展的 qq_send_image / qq_view_image 只按扩展目录解析本地路径；这里把它们改成先按桌宠工作区解析、扩展目录兜底。第三方包升级会把改动覆写掉，所以每次启动都重打一遍；打不上会显示在这里。',
+  patchDesc: '旧版 QQ 扩展（qqbot）的 qq_send_image / qq_view_image 只按扩展目录解析本地路径；这里把它们改成先按桌宠工作区解析、扩展目录兜底。第三方包升级会把改动覆写掉，所以每次启动都重打一遍；打不上会显示在这里。切到官方 QQ 扩展（qq）后它按 blob 句柄发图，这两处自动跳过、不碰文件。',
   patchWhere: '安装目录',
   patchCount: '补丁',
   patchAt: '上次检查',
   patchLastRestart: '上次重启请求',
   patchAllDone: '处都在',
+  patchNone: '没有要打补丁的 QQ 扩展',
   patchPending: '刚补上，重启后生效',
   patchMissing: '有没打上的',
   patchNoApp: '没找到安装目录',
@@ -181,12 +182,13 @@ const EN = {
   unknown: 'unknown',
   loadBad: 'Could not read the picture list',
   patchTitle: 'QQ Image Paths',
-  patchDesc: 'Sending a picture to the console Chat page needs two code patches in the install directory (the page renderer and the pet\'s event outlet). The updater overwrites them, so they are re-applied on every start; anything that fails shows up here.',
+  patchDesc: 'The legacy QQ extension (qqbot) resolves local picture paths against its own folder; these two patches make qq_send_image / qq_view_image try your pet workspace first. The updater overwrites them, so they are re-applied on every start; anything that fails shows up here. With the official QQ extension (qq) pictures travel as blob handles, so both patches are skipped and no file is touched.',
   patchWhere: 'Install dir',
   patchCount: 'Patches',
   patchAt: 'Checked',
   patchLastRestart: 'Last restart request',
   patchAllDone: 'in place',
+  patchNone: 'no QQ extension needs patching',
   patchPending: 'applied, takes effect after restart',
   patchMissing: 'some are missing',
   patchNoApp: 'install directory not found',
@@ -573,7 +575,7 @@ function statusPanel(ctx) {
           ? tx.patchUnchecked
           : restored.length
             ? tx.patchRestored
-            : (pending ? tx.patchPending : `${done}/${total} ${tx.patchAllDone}`);
+            : (pending ? tx.patchPending : (total === 0 ? tx.patchNone : `${done}/${total} ${tx.patchAllDone}`));
     const tone = p?.error || failed.length || restored.length ? 'off' : 'on';
     patchHead.replaceChildren(ctx.ui.pill(label, tone));
     if (patched.length) patchHead.appendChild(ctx.ui.pill(`${tx.patchApplied} ${patched.length}`, 'on'));
@@ -583,7 +585,7 @@ function statusPanel(ctx) {
       : tx.none;
     patchKv.replaceChildren(ctx.ui.kv([
       { k: tx.patchWhere, v: ctx.ui.h('span', 'mono', String(p?.appRoot || '—')) },
-      { k: tx.patchCount, v: `${done}/${total}` },
+      { k: tx.patchCount, v: total === 0 ? (tx.patchNone) : `${done}/${total}` },
       { k: tx.patchAt, v: p?.at ? ctx.ui.fmt.clock(p.at) : tx.none },
       { k: tx.patchBackup, v: ctx.ui.h('span', 'mono', backupText) },
       ...(restored.length
