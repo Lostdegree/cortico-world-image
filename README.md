@@ -297,7 +297,8 @@ pnpm add "D:\path\to\cortico-world-image" --ignore-workspace
 - `comfyui`：本地 ComfyUI（默认 `http://127.0.0.1:8188`），**不要密钥**，但要写 `ckpt`
   （checkpoint 文件名，就是 `ComfyUI/models/checkpoints/` 里那个文件名）。
 
-每档都能写这些（不写的继承 `worlds.image` 的同名项）：
+每档都能写这些。`baseUrl` / `model` / `apiKeySecret` / `size` / `quality` / `format` / `timeoutMs` 不写就继承
+`worlds.image` 的单档设置；其余（`ckpt`、`loras`、采样参数等）只有链里的档才有，按下面的默认值走：
 
 | 键 | 说明 |
 | --- | --- |
@@ -305,7 +306,7 @@ pnpm add "D:\path\to\cortico-world-image" --ignore-workspace
 | `preset` | `openai` / `comfyui` |
 | `baseUrl` / `model` / `apiKeySecret` / `size` / `quality` / `format` / `timeoutMs` | 同上面那张表 |
 | `ckpt` | ComfyUI 的 checkpoint 文件名（`comfyui` 必填） |
-| `loras` | ComfyUI 的 LoRA：`["add_detail:0.6", {"name":"x.safetensors","strength":0.4}]` |
+| `loras` | ComfyUI 的 LoRA：`["add_detail.safetensors:0.6", {"name":"x.safetensors","strength":0.4,"clipStrength":0.25}]`（名字带扩展名，文件得先在 ComfyUI 的 `models/loras` 里） |
 | `steps` / `cfg` / `sampler` / `scheduler` / `denoise` / `negative` | ComfyUI 采样参数（默认 25 / 7 / euler / normal / 0.6） |
 | `workflow` | 自定义 ComfyUI API 工作流（对象）。给了就整份替换内置模板，占位符见下 |
 | `edit` | `false` = 这一档只用来画、不接改图（改图会跳到下一档） |
@@ -317,7 +318,9 @@ pnpm add "D:\path\to\cortico-world-image" --ignore-workspace
 状态页的「模型链」卡片默认就是友好编辑：一档一张小卡片，填「名称 / 类型 / 地址 / 模型或 ckpt」，
 用「上移 / 下移」调优先级、「删除」去掉一档，「＋ 本地 ComfyUI」「＋ 云端接口」加档，
 「用下面的单档配置生成一档」把现有的单档设置抄成一档。保存就是写 `worlds.image.models`；
-`workflow`、`loras`、`steps` 这类高级字段点「高级：JSON」直接改原文。
+`workflow`、`loras`、`steps` 这类高级字段点「高级：JSON」直接改原文——**链还空着时它自带一份现成范例**
+（一档本地 ComfyUI，带 `ckpt`、两条 LoRA、采样参数与负面提示；一档云端），
+把 `ckpt` / `loras` 换成自己 `models` 里的文件名，「应用 JSON」再「保存模型链」就能用。
 「测试模型链」会挨档探活：ComfyUI 看 `/system_stats` 并核对 `ckpt` 在不在，OpenAI 兼容看
 `/models`（端点没这条路由也算在线）。探活每档最多等 6 秒；链上有没保存的改动时会先拦住。
 

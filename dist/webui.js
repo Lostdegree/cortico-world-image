@@ -85,13 +85,13 @@ const ZH = {
   chainAddCloud: '＋ 云端接口',
   chainFromSingle: '用下面的单档配置生成一档',
   chainJson: '高级：JSON',
-  chainJsonHint: '这里是原始的 worlds.image.models：workflow、loras、steps、denoise 这些高级字段直接在这改。',
+  chainJsonHint: '这里是原始的 worlds.image.models：workflow、loras、steps、denoise 这些高级字段直接在这改。链空着打开时会填一份现成范例（本地 ComfyUI 带 LoRA + 云端各一档），把 ckpt / loras 换成你自己 models 里的文件名，先「应用 JSON」再「保存模型链」。',
   chainJsonApply: '应用 JSON',
   chainJsonBack: '收起 JSON',
   chainJsonApplied: 'JSON 已读进来，点「保存模型链」才写进配置',
   chainBroken: '这段 JSON 读不了',
   chainBrokenHint: '先修好 JSON，或点「用下面的单档配置生成一档」把它覆盖掉。在保存之前配置不会动。',
-  chainEmptyHint: '还没有配模型链，现在用的是下面那套单档配置。想让本地 ComfyUI 和云端轮着试，点「＋ 本地 ComfyUI」或「＋ 云端接口」加一档。',
+  chainEmptyHint: '还没有配模型链，现在用的是下面那套单档配置。想让本地 ComfyUI 和云端轮着试，点「＋ 本地 ComfyUI」或「＋ 云端接口」加一档；想照着现成范例改（本地 ComfyUI 带 LoRA + 云端各一档），点「高级：JSON」。',
   chainOrderHint: '从上到下就是优先级。',
   chainNeedBase: '缺地址',
   chainNeedCkpt: '缺 ckpt 文件名',
@@ -217,13 +217,13 @@ const EN = {
   chainAddCloud: '+ Cloud endpoint',
   chainFromSingle: 'Create one from the single-backend settings',
   chainJson: 'Advanced: JSON',
-  chainJsonHint: 'Raw worlds.image.models — edit workflow, loras, steps, denoise and other advanced fields here.',
+  chainJsonHint: 'Raw worlds.image.models — edit workflow, loras, steps, denoise and other advanced fields here. With no chain yet it opens pre-filled with a working example (a local ComfyUI tier with LoRA plus a cloud tier); swap ckpt / loras for your own file names, then Apply JSON and Save chain.',
   chainJsonApply: 'Apply JSON',
   chainJsonBack: 'Hide JSON',
   chainJsonApplied: 'JSON loaded — press "Save chain" to write it',
   chainBroken: 'This JSON will not parse',
   chainBrokenHint: 'Fix it, or overwrite it with "Create one from…". Nothing changes until you save.',
-  chainEmptyHint: 'No model chain yet: the single-backend settings below are in use. Add a local ComfyUI or a cloud entry to mix them.',
+  chainEmptyHint: 'No model chain yet: the single-backend settings below are in use. Add a local ComfyUI or a cloud entry to mix them — or open Advanced: JSON to start from a ready example (local ComfyUI with LoRA plus a cloud tier).',
   chainOrderHint: 'Top to bottom is the priority order.',
   chainNeedBase: 'missing endpoint',
   chainNeedCkpt: 'missing ckpt file name',
@@ -323,6 +323,37 @@ function chainToJson(entries) {
     return out;
   });
   return list.length ? JSON.stringify(list, null, 2) : '[]';
+}
+
+/**
+ * 「高级：JSON」空着的时候给的范例：一档本地 ComfyUI（带 LoRA、采样参数）
+ * + 一档云端。照着改就能用，不用去翻文档。
+ */
+function chainExampleJson() {
+  return JSON.stringify([
+    {
+      name: 'local',
+      preset: 'comfyui',
+      baseUrl: 'http://127.0.0.1:8188',
+      ckpt: 'sd_xl_base_1.0.safetensors',
+      loras: [
+        'add_detail.safetensors:0.6',
+        { name: 'style_anime.safetensors', strength: 0.8, clipStrength: 0.5 },
+      ],
+      negative: 'lowres, blurry, watermark, text',
+      steps: 25,
+      cfg: 7,
+      sampler: 'euler',
+      scheduler: 'normal',
+      denoise: 0.6,
+    },
+    {
+      name: 'cloud',
+      preset: 'openai',
+      baseUrl: 'https://api.openai.com/v1',
+      model: 'gpt-image-1',
+    },
+  ], null, 2);
 }
 
 /** 一档是哪种：只认 comfyui，其余都当 OpenAI 兼容（和 src/chain.js 对齐）。 */
@@ -777,7 +808,8 @@ function statusPanel(ctx) {
       chainRows.appendChild(ctx.ui.h('div', 'iw-sub', tx.chainBrokenHint));
     }
     chainEdit.forEach((entry, index) => chainRows.appendChild(chainRowOf(entry, index)));
-    chainJson.value = chainToJson(chainEdit);
+    // 链空着、且 JSON 框开着时，别用 `[]` 把里面的范例/草稿冲掉。
+    if (!chainJsonShown || chainEdit.length || chainBroken) chainJson.value = chainToJson(chainEdit);
     chainTestBox.replaceChildren();
     if (chainProbe?.error) chainTestBox.appendChild(ctx.ui.h('div', 'iw-sub', chainProbe.error));
     for (const it of Array.isArray(chainProbe?.items) ? chainProbe.items : []) {
@@ -799,7 +831,11 @@ function statusPanel(ctx) {
   const toggleChainJson = (force) => {
     chainJsonShown = typeof force === 'boolean' ? force : !chainJsonShown;
     chainJsonWrap.style.display = chainJsonShown ? '' : 'none';
-    if (chainJsonShown) chainJson.value = chainToJson(chainEdit);
+    if (!chainJsonShown) return;
+    const raw = chainJson.value.trim();
+    // 空链打开时给一份现成范例（本地 ComfyUI + LoRA、云端各一档）；已有草稿就留着。
+    if (!chainBroken && !chainEdit.length && (!raw || raw === '[]')) chainJson.value = chainExampleJson();
+    else if (!raw || (chainEdit.length && raw === '[]')) chainJson.value = chainToJson(chainEdit);
   };
 
   const applyChainJson = () => {

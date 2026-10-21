@@ -1084,6 +1084,48 @@ try {
   check(!!findByText(chainRoot, '高级：JSON'), '有「高级：JSON」入口');
   check(chainRowsOf().length === 0, '没配链时不画行', String(chainRowsOf().length));
 
+  // 「高级：JSON」空着打开时给一份现成范例（本地 ComfyUI 带 LoRA + 云端各一档）
+  const exampleEnv = makeEnv(world, 'status');
+  bundle.panels.status.mount(exampleEnv.ctx);
+  await tick(30);
+  const exRoot = exampleEnv.root;
+  const exRowsOf = () => findAll(exRoot, (el) => String(el.className).split(/\s+/).includes('iw-chainrow'));
+  const exTextarea = () => findAll(exRoot, (el) => el.tagName === 'TEXTAREA')[0];
+  findByText(exRoot, '高级：JSON')?.click();
+  await tick(30);
+  const exValue = String(exTextarea()?.value ?? '');
+  check(
+    exValue.includes('"preset": "comfyui"') && exValue.includes('"loras"'),
+    '空链打开「高级：JSON」自带本地 ComfyUI + LoRA 的范例',
+    exValue.slice(0, 120),
+  );
+  check(
+    exValue.includes('sd_xl_base_1.0.safetensors') && exValue.includes('"preset": "openai"'),
+    '范例里既有 ckpt / 采样参数，也有云端一档',
+    exValue.slice(0, 120),
+  );
+  findByText(exRoot, '应用 JSON')?.click();
+  await tick(30);
+  check(exRowsOf().length === 2, '范例「应用 JSON」后变成两档', String(exRowsOf().length));
+  check(
+    exampleEnv.state.toasts.some((t) => t.text.includes('JSON 已读进来')),
+    '应用范例有提示（还没写进配置）',
+    JSON.stringify(exampleEnv.state.toasts.map((t) => t.text)),
+  );
+  findByText(exRoot, '保存模型链')?.click();
+  await tick(40);
+  let exSaved = null;
+  try {
+    exSaved = JSON.parse(exampleEnv.state.configWrites[0]?.values?.['worlds.image.models'] ?? '');
+  } catch {
+    exSaved = null;
+  }
+  check(
+    Array.isArray(exSaved) && Array.isArray(exSaved[0]?.loras) && exSaved[0].loras.some((it) => String(JSON.stringify(it)).includes('add_detail')),
+    '范例里的 loras（含简写与对象写法）原样存进配置',
+    JSON.stringify(exSaved?.[0]?.loras),
+  );
+
   findByText(chainRoot, '＋ 本地 ComfyUI')?.click();
   await tick(30);
   check(chainRowsOf().length === 1, '点一下多出一档', String(chainRowsOf().length));
