@@ -25,8 +25,15 @@ const STYLE = `
 .iw-chainrow { display: grid; grid-template-columns: 24px 120px 150px 1fr 1fr 120px; gap: 6px; align-items: center; padding: 6px; border: 1px solid rgba(128,128,128,.3); border-radius: 8px; }
 .iw-chainrow input, .iw-chainrow select { min-width: 0; width: 100%; box-sizing: border-box; }
 .iw-chainbad { grid-column: 1 / -1; color: #d9534f; font-size: 11px; }
-.iw-chaintools { display: flex; gap: 4px; }
+.iw-chaintools { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
 .iw-chaintools button { padding: 2px 6px; }
+.iw-chainadv { border: 1px dashed rgba(128,128,128,.45); border-radius: 8px; padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+.iw-chainadvhead { display: flex; gap: 8px; align-items: center; justify-content: space-between; }
+.iw-lorarows { display: flex; flex-direction: column; gap: 4px; }
+.iw-lorarow { display: grid; grid-template-columns: 1fr 90px 90px 64px; gap: 6px; align-items: center; }
+.iw-lorarow input { min-width: 0; width: 100%; box-sizing: border-box; }
+.iw-chainadvgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; align-items: end; }
+.iw-chainadvgrid .iw-chainadvwide { grid-column: 1 / -1; }
 `;
 
 const ZH = {
@@ -83,14 +90,30 @@ const ZH = {
   chainNamePlaceholder: 'local / cloud',
   chainAddComfyui: '＋ 本地 ComfyUI',
   chainAddCloud: '＋ 云端接口',
-  chainFromSingle: '用下面的单档配置生成一档',
+  chainAdv: '高级参数',
+  chainAdvTitle: '高级参数',
+  chainAdvClose: '收起',
+  chainAdvHint: 'LoRA 文件要先放进 ComfyUI 的 models/loras，名字带扩展名（可带子目录）；强度留空按 1，CLIP 强度留空就跟强度一样。',
+  chainAdvLora: 'LoRA',
+  chainAdvLoraAdd: '＋ LoRA',
+  chainAdvLoraEmpty: '还没加 LoRA；只用 checkpoint 出图就留空。',
+  chainAdvLoraName: '文件名，如 add_detail.safetensors',
+  chainAdvLoraStrength: '强度',
+  chainAdvLoraClip: 'CLIP 强度',
+  chainAdvNegative: '负面提示词',
+  chainAdvNegativePh: 'lowres, blurry, watermark',
+  chainAdvSteps: 'steps',
+  chainAdvCfg: 'cfg',
+  chainAdvDenoise: 'denoise',
+  chainAdvSampler: '采样器',
+  chainAdvScheduler: '调度器',
   chainJson: '高级：JSON',
   chainJsonHint: '这里是原始的 worlds.image.models：workflow、loras、steps、denoise 这些高级字段直接在这改。链空着打开时会填一份现成范例（本地 ComfyUI 带 LoRA + 云端各一档），把 ckpt / loras 换成你自己 models 里的文件名，先「应用 JSON」再「保存模型链」。',
   chainJsonApply: '应用 JSON',
   chainJsonBack: '收起 JSON',
   chainJsonApplied: 'JSON 已读进来，点「保存模型链」才写进配置',
   chainBroken: '这段 JSON 读不了',
-  chainBrokenHint: '先修好 JSON，或点「用下面的单档配置生成一档」把它覆盖掉。在保存之前配置不会动。',
+  chainBrokenHint: '先修好 JSON，或把这一段清空重来。在保存之前配置不会动。',
   chainEmptyHint: '还没有配模型链，现在用的是下面那套单档配置。想让本地 ComfyUI 和云端轮着试，点「＋ 本地 ComfyUI」或「＋ 云端接口」加一档；想照着现成范例改（本地 ComfyUI 带 LoRA + 云端各一档），点「高级：JSON」。',
   chainOrderHint: '从上到下就是优先级。',
   chainNeedBase: '缺地址',
@@ -215,14 +238,30 @@ const EN = {
   chainNamePlaceholder: 'local / cloud',
   chainAddComfyui: '+ Local ComfyUI',
   chainAddCloud: '+ Cloud endpoint',
-  chainFromSingle: 'Create one from the single-backend settings',
+  chainAdv: 'Advanced',
+  chainAdvTitle: 'Advanced settings',
+  chainAdvClose: 'Hide',
+  chainAdvHint: 'LoRA files must live in ComfyUI\'s models/loras; include the extension (subfolders OK). Blank strength means 1; blank CLIP strength follows strength.',
+  chainAdvLora: 'LoRA',
+  chainAdvLoraAdd: '+ LoRA',
+  chainAdvLoraEmpty: 'No LoRA yet — leave empty to use the checkpoint alone.',
+  chainAdvLoraName: 'file name, e.g. add_detail.safetensors',
+  chainAdvLoraStrength: 'strength',
+  chainAdvLoraClip: 'CLIP strength',
+  chainAdvNegative: 'Negative prompt',
+  chainAdvNegativePh: 'lowres, blurry, watermark',
+  chainAdvSteps: 'steps',
+  chainAdvCfg: 'cfg',
+  chainAdvDenoise: 'denoise',
+  chainAdvSampler: 'sampler',
+  chainAdvScheduler: 'scheduler',
   chainJson: 'Advanced: JSON',
   chainJsonHint: 'Raw worlds.image.models — edit workflow, loras, steps, denoise and other advanced fields here. With no chain yet it opens pre-filled with a working example (a local ComfyUI tier with LoRA plus a cloud tier); swap ckpt / loras for your own file names, then Apply JSON and Save chain.',
   chainJsonApply: 'Apply JSON',
   chainJsonBack: 'Hide JSON',
   chainJsonApplied: 'JSON loaded — press "Save chain" to write it',
   chainBroken: 'This JSON will not parse',
-  chainBrokenHint: 'Fix it, or overwrite it with "Create one from…". Nothing changes until you save.',
+  chainBrokenHint: 'Fix it, or clear the box and start over. Nothing changes until you save.',
   chainEmptyHint: 'No model chain yet: the single-backend settings below are in use. Add a local ComfyUI or a cloud entry to mix them — or open Advanced: JSON to start from a ready example (local ComfyUI with LoRA plus a cloud tier).',
   chainOrderHint: 'Top to bottom is the priority order.',
   chainNeedBase: 'missing endpoint',
@@ -354,6 +393,45 @@ function chainExampleJson() {
       model: 'gpt-image-1',
     },
   ], null, 2);
+}
+
+/** 一档的 LoRA 摊平成面板里能编辑的行：`name` / `strength` / `clipStrength`，字符串简写也收。 */
+function chainLoraList(entry) {
+  const raw = Array.isArray(entry?.loras) ? entry.loras : (entry?.loras ? [entry.loras] : []);
+  return raw.map((it) => {
+    if (typeof it === 'string') {
+      const cut = it.lastIndexOf(':');
+      const name = cut > 0 ? it.slice(0, cut) : it;
+      const strength = cut > 0 ? it.slice(cut + 1) : '';
+      return { name: name.trim(), strength: String(strength).trim(), clipStrength: '' };
+    }
+    const obj = it && typeof it === 'object' ? it : {};
+    return {
+      name: String(obj.name ?? '').trim(),
+      strength: obj.strength === undefined || obj.strength === null ? '' : String(obj.strength),
+      clipStrength: obj.clipStrength === undefined || obj.clipStrength === null ? '' : String(obj.clipStrength),
+    };
+  });
+}
+
+/** 面板里的 LoRA 行写回档位：没名字的丢掉，强度按数字存，CLIP 强度空着就不写。 */
+function chainLorasSet(entry, list) {
+  const out = [];
+  for (const it of list) {
+    const name = String(it?.name ?? '').trim();
+    if (!name) continue;
+    const num = (v) => {
+      const n = Number(String(v ?? '').trim());
+      return Number.isFinite(n) ? n : null;
+    };
+    const strength = num(it.strength);
+    const clip = num(it.clipStrength);
+    const one = { name, strength: strength === null ? 1 : strength };
+    if (clip !== null) one.clipStrength = clip;
+    out.push(one);
+  }
+  if (out.length) entry.loras = out;
+  else delete entry.loras;
 }
 
 /** 一档是哪种：只认 comfyui，其余都当 OpenAI 兼容（和 src/chain.js 对齐）。 */
@@ -689,7 +767,7 @@ function statusPanel(ctx) {
   let chainBroken = '';
   let chainDirty = false;
   let chainProbe = null;
-  let chainSingle = { baseUrl: '', model: '' };
+  let chainAdvEntry = null;
   let chainJsonShown = false;
 
   const chainCard = ctx.ui.section(tx.chainTitle, tx.chainDesc);
@@ -725,7 +803,6 @@ function statusPanel(ctx) {
     ctx.ui.button(tx.chainTest, { size: 'sm', onClick: () => { void testChain(); } }),
     ctx.ui.button(tx.chainAddComfyui, { size: 'sm', onClick: () => { addChainEntry('comfyui'); } }),
     ctx.ui.button(tx.chainAddCloud, { size: 'sm', onClick: () => { addChainEntry('openai'); } }),
-    ctx.ui.button(tx.chainFromSingle, { size: 'sm', onClick: () => { addChainEntry('single'); } }),
     ctx.ui.button(tx.chainJson, { size: 'sm', onClick: () => { toggleChainJson(); } }),
   );
   chainCard.append(chainOrderLine, chainHead, chainRows, chainEmptyLine, chainBar, chainTestBox, chainJsonWrap);
@@ -759,6 +836,7 @@ function statusPanel(ctx) {
     kindSel.value = kind;
     kindSel.addEventListener('change', () => {
       entry.preset = kindSel.value === 'comfyui' ? 'comfyui' : 'openai';
+      if (entry.preset !== 'comfyui' && chainAdvEntry === entry) chainAdvEntry = null;
       markChainDirty();
       renderChain();
     });
@@ -787,6 +865,15 @@ function statusPanel(ctx) {
     });
 
     const tools = ctx.ui.h('div', 'iw-chaintools');
+    if (kind === 'comfyui') {
+      tools.append(ctx.ui.button(tx.chainAdv, {
+        size: 'sm',
+        onClick: () => {
+          chainAdvEntry = chainAdvEntry === entry ? null : entry;
+          renderChain();
+        },
+      }));
+    }
     tools.append(
       ctx.ui.button(tx.chainMoveUp, { size: 'sm', onClick: () => { moveChainEntry(index, -1); } }),
       ctx.ui.button(tx.chainMoveDown, { size: 'sm', onClick: () => { moveChainEntry(index, 1); } }),
@@ -798,6 +885,133 @@ function statusPanel(ctx) {
     return row;
   };
 
+  /** 一档的「高级参数」：多行 LoRA + 采样参数，只对本地 ComfyUI 档出现。 */
+  const chainAdvBlock = (entry) => {
+    const box = ctx.ui.h('div', 'iw-chainadv');
+    const head = ctx.ui.h('div', 'iw-chainadvhead');
+    head.append(
+      ctx.ui.h('span', null, `${tx.chainAdvTitle} · ${String(entry.name || entry.ckpt || '')}`),
+      ctx.ui.button(tx.chainAdvClose, {
+        size: 'sm',
+        onClick: () => {
+          chainAdvEntry = null;
+          renderChain();
+        },
+      }),
+    );
+    box.appendChild(head);
+
+    // LoRA：摊平成可编辑的行，改完立刻写回这一档。
+    const list = chainLoraList(entry);
+    const loraBox = ctx.ui.h('div', 'iw-lorarows');
+    const drawLoras = () => {
+      loraBox.replaceChildren();
+      if (!list.length) {
+        loraBox.appendChild(ctx.ui.msgline(tx.chainAdvLoraEmpty));
+        return;
+      }
+      list.forEach((it, i) => {
+        const line = ctx.ui.h('div', 'iw-lorarow');
+        const nm = ctx.ui.input({ value: it.name, placeholder: tx.chainAdvLoraName, cls: 'mono' });
+        nm.addEventListener('input', () => {
+          it.name = nm.value;
+          chainLorasSet(entry, list);
+          markChainDirty();
+        });
+        const st = ctx.ui.input({ value: it.strength, placeholder: '1', cls: 'mono' });
+        st.addEventListener('input', () => {
+          it.strength = st.value;
+          chainLorasSet(entry, list);
+          markChainDirty();
+        });
+        const cp = ctx.ui.input({ value: it.clipStrength, placeholder: '=', cls: 'mono' });
+        cp.addEventListener('input', () => {
+          it.clipStrength = cp.value;
+          chainLorasSet(entry, list);
+          markChainDirty();
+        });
+        line.append(
+          nm,
+          st,
+          cp,
+          ctx.ui.button(tx.chainDel, {
+            size: 'sm',
+            onClick: () => {
+              list.splice(i, 1);
+              chainLorasSet(entry, list);
+              markChainDirty();
+              drawLoras();
+            },
+          }),
+        );
+        loraBox.appendChild(line);
+      });
+    };
+    drawLoras();
+    const loraBar = ctx.ui.actions();
+    loraBar.append(ctx.ui.button(tx.chainAdvLoraAdd, {
+      size: 'sm',
+      onClick: () => {
+        list.push({ name: '', strength: '', clipStrength: '' });
+        drawLoras();
+      },
+    }));
+    box.append(ctx.ui.h('div', 'iw-sub', tx.chainAdvLora), loraBox, loraBar, ctx.ui.h('div', 'iw-sub', tx.chainAdvHint));
+
+    /** 数字/文本字段改完就写回；清空就当没写（让 src/chain.js 用它的默认值）。 */
+    const fieldOf = (key, placeholder) => {
+      const raw = entry[key];
+      const el = ctx.ui.input({ value: raw === undefined || raw === null ? '' : String(raw), placeholder, cls: 'mono' });
+      el.addEventListener('input', () => {
+        const v = el.value.trim();
+        if (!v) delete entry[key];
+        else {
+          const num = Number(v);
+          entry[key] = Number.isFinite(num) ? num : v;
+        }
+        markChainDirty();
+      });
+      return el;
+    };
+
+    const grid = ctx.ui.h('div', 'iw-chainadvgrid');
+    const negative = ctx.ui.textarea({ rows: 2, cls: 'mono', placeholder: tx.chainAdvNegativePh });
+    negative.value = String(entry.negative ?? '');
+    negative.addEventListener('input', () => {
+      entry.negative = negative.value;
+      markChainDirty();
+    });
+    const negWrap = ctx.ui.h('div', 'iw-chainadvwide');
+    negWrap.appendChild(ctx.ui.field(tx.chainAdvNegative, negative));
+
+    const pick = (key, options, fallback) => {
+      const sel = ctx.ui.select({ cls: 'mono' });
+      const current = String(entry[key] ?? fallback);
+      const all = options.includes(current) ? options : [current, ...options];
+      for (const opt of all) {
+        const el = ctx.ui.h('option', null, opt);
+        el.value = opt;
+        sel.appendChild(el);
+      }
+      sel.value = current;
+      sel.addEventListener('change', () => {
+        entry[key] = sel.value;
+        markChainDirty();
+      });
+      return sel;
+    };
+    grid.append(
+      negWrap,
+      ctx.ui.field(tx.chainAdvSteps, fieldOf('steps', '25')),
+      ctx.ui.field(tx.chainAdvCfg, fieldOf('cfg', '7')),
+      ctx.ui.field(tx.chainAdvDenoise, fieldOf('denoise', '0.6')),
+      ctx.ui.field(tx.chainAdvSampler, pick('sampler', ['euler', 'euler_ancestral', 'dpmpp_2m', 'dpmpp_2m_sde', 'dpmpp_sde', 'ddim', 'heun', 'lms'], 'euler')),
+      ctx.ui.field(tx.chainAdvScheduler, pick('scheduler', ['normal', 'karras', 'exponential', 'sgm_uniform', 'simple', 'ddim_uniform'], 'normal')),
+    );
+    box.appendChild(grid);
+    return box;
+  };
+
   const renderChain = () => {
     chainOrderLine.style.display = chainEdit.length ? '' : 'none';
     chainHead.style.display = chainEdit.length ? '' : 'none';
@@ -807,7 +1021,10 @@ function statusPanel(ctx) {
       chainRows.appendChild(ctx.ui.h('div', 'iw-sub', `${tx.chainBroken}：${chainBroken}`));
       chainRows.appendChild(ctx.ui.h('div', 'iw-sub', tx.chainBrokenHint));
     }
-    chainEdit.forEach((entry, index) => chainRows.appendChild(chainRowOf(entry, index)));
+    chainEdit.forEach((entry, index) => {
+      chainRows.appendChild(chainRowOf(entry, index));
+      if (chainAdvEntry === entry) chainRows.appendChild(chainAdvBlock(entry));
+    });
     // 链空着、且 JSON 框开着时，别用 `[]` 把里面的范例/草稿冲掉。
     if (!chainJsonShown || chainEdit.length || chainBroken) chainJson.value = chainToJson(chainEdit);
     chainTestBox.replaceChildren();
@@ -852,12 +1069,7 @@ function statusPanel(ctx) {
   const addChainEntry = (kind) => {
     const entry = kind === 'comfyui'
       ? { name: chainUniqueName('local', chainEdit), preset: 'comfyui', baseUrl: 'http://127.0.0.1:8188', ckpt: '' }
-      : {
-          name: chainUniqueName('cloud', chainEdit),
-          preset: 'openai',
-          baseUrl: kind === 'single' ? chainSingle.baseUrl : '',
-          model: kind === 'single' ? chainSingle.model : '',
-        };
+      : { name: chainUniqueName('cloud', chainEdit), preset: 'openai', baseUrl: '', model: '' };
     chainEdit.push(entry);
     chainBroken = '';
     chainDirty = true;
@@ -876,7 +1088,8 @@ function statusPanel(ctx) {
   };
 
   const removeChainEntry = (index) => {
-    chainEdit.splice(index, 1);
+    const [gone] = chainEdit.splice(index, 1);
+    if (gone === chainAdvEntry) chainAdvEntry = null;
     chainDirty = true;
     chainProbe = null;
     renderChain();
@@ -986,10 +1199,6 @@ function statusPanel(ctx) {
       { k: tx.runtime, v: `Node ${s?.node ?? '?'} · ${s?.platform ?? '?'}` },
     ]));
     keyInput.placeholder = s?.keySet ? tx.keyPlaceholderSet : tx.keyPlaceholder;
-    chainSingle = {
-      baseUrl: String(s?.single?.baseUrl ?? ''),
-      model: String(s?.single?.model ?? ''),
-    };
     if (!chainDirty) {
       const parsed = parseChainJson(s?.models);
       chainEdit = parsed.entries;

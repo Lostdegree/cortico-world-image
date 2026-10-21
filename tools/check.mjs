@@ -1080,7 +1080,7 @@ try {
 
   check(!!findByText(chainRoot, '＋ 本地 ComfyUI'), '有「＋ 本地 ComfyUI」按钮');
   check(!!findByText(chainRoot, '＋ 云端接口'), '有「＋ 云端接口」按钮');
-  check(!!findByText(chainRoot, '用下面的单档配置生成一档'), '有「用下面的单档配置生成一档」按钮');
+  check(!findByText(chainRoot, '用下面的单档配置生成一档'), '「用下面的单档配置生成一档」按钮已去掉');
   check(!!findByText(chainRoot, '高级：JSON'), '有「高级：JSON」入口');
   check(chainRowsOf().length === 0, '没配链时不画行', String(chainRowsOf().length));
 
@@ -1153,16 +1153,16 @@ try {
     JSON.stringify(savedChain),
   );
 
-  // 从单档配置生成一档云端，再插一档本地，验证排序按钮
-  findByText(chainRoot, '用下面的单档配置生成一档')?.click();
+  // 保存后重新读配置，再加一档云端，验证排序按钮
+  findByText(chainRoot, '＋ 云端接口')?.click();
   await tick(30);
-  check(chainRowsOf().length === 1, '用单档配置能生成一档', String(chainRowsOf().length));
-  const fromSingle = chainInputsOf(chainRowsOf()[0]);
-  check(
-    fromSingle[1]?.value === 'https://api.openai.com/v1' && fromSingle[2]?.value === 'gpt-image-1',
-    '生成的那档带着单档的地址与模型名',
-    `${fromSingle[1]?.value} / ${fromSingle[2]?.value}`,
-  );
+  check(chainRowsOf().length === 1, '保存后链重新从配置读回来，再加云端还是一档', String(chainRowsOf().length));
+  check(!findByText(chainRowsOf()[0], '高级参数'), '云端档没有「高级参数」按钮');
+  const cloudInputs = chainInputsOf(chainRowsOf()[0]);
+  cloudInputs[1].value = 'https://api.openai.com/v1';
+  fire(cloudInputs[1], 'input');
+  cloudInputs[2].value = 'gpt-image-1';
+  fire(cloudInputs[2], 'input');
 
   findByText(chainRoot, '＋ 本地 ComfyUI')?.click();
   await tick(30);
@@ -1173,6 +1173,87 @@ try {
   const orderAfter = chainRowsOf().map(chainNameOf).join(',');
   check(orderAfter === 'local,cloud' && orderBefore === 'cloud,local', '「下移」把两档换了位置', `${orderBefore} → ${orderAfter}`);
 
+  // 「高级参数」：只有本地 ComfyUI 档有，能加多行 LoRA 与采样参数
+  const comfyRow = chainRowsOf().find((row) => chainKindOfRow(row)?.value === 'comfyui');
+  const comfyInputs = chainInputsOf(comfyRow);
+  comfyInputs[2].value = 'sd_xl_base_1.0.safetensors';
+  fire(comfyInputs[2], 'input');
+  check(!!findByText(comfyRow, '高级参数'), '本地 ComfyUI 档有「高级参数」按钮');
+  findByText(comfyRow, '高级参数')?.click();
+  await tick(30);
+  const advBox = findAll(chainRoot, (el) => String(el.className).split(/\s+/).includes('iw-chainadv'))[0];
+  check(!!advBox, '点「高级参数」展开高级面板');
+  check(!!findByText(advBox, '还没加 LoRA；只用 checkpoint 出图就留空。'), '高级面板里先说清「没有 LoRA」');
+  const advNumInputs = advBox ? findAll(advBox, (el) => el.tagName === 'INPUT') : [];
+  check(
+    ['25', '7', '0.6'].every((ph) => advNumInputs.some((el) => el.placeholder === ph)),
+    '高级面板里有 steps / cfg / denoise 三个数字框',
+    JSON.stringify(advNumInputs.map((el) => el.placeholder)),
+  );
+  check(advBox ? findAll(advBox, (el) => el.tagName === 'SELECT').length === 2 : false, '高级面板里有采样器 / 调度器两个下拉');
+  check(advBox ? findAll(advBox, (el) => el.tagName === 'TEXTAREA').length === 1 : false, '高级面板里有负面提示词输入区');
+
+  findByText(advBox, '＋ LoRA')?.click();
+  await tick(30);
+  const loraRows = findAll(advBox, (el) => String(el.className).split(/\s+/).includes('iw-lorarow'));
+  check(loraRows.length === 1, '「＋ LoRA」加出一行', String(loraRows.length));
+  const loraInputs = findAll(loraRows[0], (el) => el.tagName === 'INPUT');
+  check(loraInputs.length === 3, '一行 LoRA 是 文件名 / 强度 / CLIP 强度', String(loraInputs.length));
+  loraInputs[0].value = 'add_detail.safetensors';
+  fire(loraInputs[0], 'input');
+  loraInputs[1].value = '0.6';
+  fire(loraInputs[1], 'input');
+  loraInputs[2].value = '0.3';
+  fire(loraInputs[2], 'input');
+
+  findByText(advBox, '＋ LoRA')?.click();
+  await tick(30);
+  check(findAll(advBox, (el) => String(el.className).split(/\s+/).includes('iw-lorarow')).length === 2, '能加第二行 LoRA', String(findAll(advBox, (el) => String(el.className).split(/\s+/).includes('iw-lorarow')).length));
+
+  const advInputs = findAll(advBox, (el) => el.tagName === 'INPUT');
+  const stepsInput = advInputs.find((el) => el.placeholder === '25');
+  const cfgInput = advInputs.find((el) => el.placeholder === '7');
+  const denoiseInput = advInputs.find((el) => el.placeholder === '0.6');
+  stepsInput.value = '32';
+  fire(stepsInput, 'input');
+  cfgInput.value = '6.5';
+  fire(cfgInput, 'input');
+  denoiseInput.value = '0.55';
+  fire(denoiseInput, 'input');
+  const negArea = findAll(advBox, (el) => el.tagName === 'TEXTAREA')[0];
+  negArea.value = 'lowres, watermark';
+  fire(negArea, 'input');
+  const samplerSel = findAll(advBox, (el) => el.tagName === 'SELECT')[0];
+  samplerSel.value = 'dpmpp_2m';
+  fire(samplerSel, 'change');
+
+  findByText(chainRoot, '保存模型链')?.click();
+  await tick(40);
+  let advSaved = null;
+  try {
+    advSaved = JSON.parse(chainEnv.state.configWrites.at(-1)?.values?.['worlds.image.models'] ?? '');
+  } catch {
+    advSaved = null;
+  }
+  const advEntry = Array.isArray(advSaved) ? advSaved.find((it) => it.preset === 'comfyui') : null;
+  check(
+    Array.isArray(advEntry?.loras) && advEntry.loras.length === 1
+      && advEntry.loras[0]?.name === 'add_detail.safetensors'
+      && advEntry.loras[0]?.strength === 0.6
+      && advEntry.loras[0]?.clipStrength === 0.3,
+    'LoRA 行写进 loras（没文件名的第二行被丢掉）',
+    JSON.stringify(advEntry?.loras),
+  );
+  check(
+    advEntry?.steps === 32 && advEntry?.cfg === 6.5 && advEntry?.denoise === 0.55
+      && advEntry?.negative === 'lowres, watermark' && advEntry?.sampler === 'dpmpp_2m',
+    'steps / cfg / denoise / negative / sampler 都存进了那一档',
+    JSON.stringify({ steps: advEntry?.steps, cfg: advEntry?.cfg, denoise: advEntry?.denoise, negative: advEntry?.negative, sampler: advEntry?.sampler }),
+  );
+
+  // 再补一档空的本地档，验证缺 ckpt 时保存被拦
+  findByText(chainRoot, '＋ 本地 ComfyUI')?.click();
+  await tick(30);
   const wroteBefore = chainEnv.state.configWrites.length;
   findByText(chainRoot, '保存模型链')?.click();
   await tick(30);
@@ -1181,9 +1262,9 @@ try {
     '缺 ckpt 时保存被拦下并说清原因',
     JSON.stringify(chainEnv.state.toasts.map((t) => t.text)),
   );
-  findByText(chainRoot, '删除')?.click();
+  findByText(chainRowsOf()[chainRowsOf().length - 1], '删除')?.click();
   await tick(30);
-  check(chainRowsOf().length >= 1, '「删除」能去掉一档', String(chainRowsOf().length));
+  check(chainRowsOf().length === 0, '「删除」能去掉一档', String(chainRowsOf().length));
 
   section('未知方法与面板');
   let threw = false;

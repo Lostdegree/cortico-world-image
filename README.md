@@ -169,7 +169,7 @@ pet_say({ script: '看，画好了。', images: ['<句柄>'] })  // 气泡里说
 
 1. 把 `package.json` 的 `version` 抬一格（例如 `0.4.1` → `0.4.2`）；
 2. 重启控制台（状态页「重启控制台」或 `node tools/patch.mjs --restart`）；
-3. 程序内窗口自动重载 → 新的 URL `/assets/extensions/cortico-world-image/0.4.1/webui.js`
+3. 程序内窗口自动重载 → 新的 URL `/assets/extensions/cortico-world-image/0.4.2/webui.js`
    取到新脚本，旧 URL 立刻变 404。
 
 不想抬版本也行，但要**先完全退出程序**再删缓存目录：`<安装>\data\Cache`、
@@ -205,7 +205,7 @@ registry 上有版本时直接从 npm 装；想自己改代码、或者 `npm vie
 或者用命令行，在 `data/extensions` 目录里（`extensions/package.json` 所在处）执行：
 
 ```powershell
-pnpm add cortico-world-image --ignore-workspace        # 想钉住版本就写 cortico-world-image@0.4.1
+pnpm add cortico-world-image --ignore-workspace        # 想钉住版本就写 cortico-world-image@0.4.2
 ```
 
 装完重启。升级同理：重跑一遍（控制台的「扩展」页会显示已装版本与最新版本），装完同样要重启。
@@ -316,9 +316,11 @@ pnpm add "D:\path\to\cortico-world-image" --ignore-workspace
 失败了直接报错、不偷偷换——想让它自己挑就别传 `model`。
 
 状态页的「模型链」卡片默认就是友好编辑：一档一张小卡片，填「名称 / 类型 / 地址 / 模型或 ckpt」，
-用「上移 / 下移」调优先级、「删除」去掉一档，「＋ 本地 ComfyUI」「＋ 云端接口」加档，
-「用下面的单档配置生成一档」把现有的单档设置抄成一档。保存就是写 `worlds.image.models`；
-`workflow`、`loras`、`steps` 这类高级字段点「高级：JSON」直接改原文——**链还空着时它自带一份现成范例**
+用「上移 / 下移」调优先级、「删除」去掉一档，「＋ 本地 ComfyUI」「＋ 云端接口」加档。
+本地 ComfyUI 那档还多一个「高级参数」按钮：能加**多行 LoRA**（文件名 / 强度 / CLIP 强度，文件名要带
+扩展名、可带子目录），也能改 `negative`、`steps`、`cfg`、`sampler`、`scheduler`、`denoise`
+——存的就是该档的 `loras`、`negative`、`steps` 这些字段，等于面板版的「高级：JSON」。
+保存就是写 `worlds.image.models`；`workflow` 这类只能手写的字段仍点「高级：JSON」改原文——**链还空着时它自带一份现成范例**
 （一档本地 ComfyUI，带 `ckpt`、两条 LoRA、采样参数与负面提示；一档云端），
 把 `ckpt` / `loras` 换成自己 `models` 里的文件名，「应用 JSON」再「保存模型链」就能用。
 「测试模型链」会挨档探活：ComfyUI 看 `/system_stats` 并核对 `ckpt` 在不在，OpenAI 兼容看
