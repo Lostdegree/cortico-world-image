@@ -742,6 +742,11 @@ export class ImageWorld {
       models: this.#raw('models'),
       chain: env.chain,
       chainError: env.chainError,
+      single: {
+        baseUrl: this.#str('baseUrl'),
+        model: this.#str('model'),
+        apiKeySecret: this.#str('apiKeySecret'),
+      },
       patch: {
         ...PATCH_STATE,
         packageDir: PACKAGE_DIR,

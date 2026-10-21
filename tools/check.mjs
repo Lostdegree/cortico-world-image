@@ -37,6 +37,11 @@ const check = (cond, label, detail = '') => (cond ? pass(label) : fail(label, de
 
 const tick = (ms = 5) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** 假 DOM 没实现事件派发，直接调监听器就够了。 */
+const fire = (el, type) => {
+  for (const fn of el?.listeners?.get(type) ?? []) fn({ target: el, currentTarget: el });
+};
+
 // ---------------------------------------------------------------------------
 // 假 DOM：只实现两个面板真正用到的那点东西
 // ---------------------------------------------------------------------------
@@ -278,6 +283,7 @@ function makeEnv(world, panelId, options = {}) {
     drawers: [],
     busy: [],
     confirms: [],
+    configWrites: [],
     confirmAnswer: options.confirmAnswer !== false,
   };
   const root = new FakeEl('div');
@@ -296,7 +302,10 @@ function makeEnv(world, panelId, options = {}) {
       return new Blob([bytes], { type: res.$file.mime });
     },
     pickPath: async () => null,
-    setConfig: async () => '',
+    setConfig: async (groupId, values) => {
+      state.configWrites.push({ groupId, values });
+      return '';
+    },
     stream: (handlers) => {
       const handle = { send() {}, open: true, dispose() {} };
       streams.push({ handlers, handle });
@@ -1058,6 +1067,81 @@ try {
   } finally {
     globalThis.fetch = realFetch;
   }
+
+  section('模型链编辑器（面板）');
+  const chainEnv = makeEnv(world, 'status');
+  bundle.panels.status.mount(chainEnv.ctx);
+  await tick(30);
+  const chainRoot = chainEnv.root;
+  const chainRowsOf = () => findAll(chainRoot, (el) => String(el.className).split(/\s+/).includes('iw-chainrow'));
+  const chainInputsOf = (row) => findAll(row, (el) => el.tagName === 'INPUT');
+  const chainNameOf = (row) => chainInputsOf(row)[0]?.value;
+  const chainKindOfRow = (row) => findAll(row, (el) => el.tagName === 'SELECT')[0];
+
+  check(!!findByText(chainRoot, '＋ 本地 ComfyUI'), '有「＋ 本地 ComfyUI」按钮');
+  check(!!findByText(chainRoot, '＋ 云端接口'), '有「＋ 云端接口」按钮');
+  check(!!findByText(chainRoot, '用下面的单档配置生成一档'), '有「用下面的单档配置生成一档」按钮');
+  check(!!findByText(chainRoot, '高级：JSON'), '有「高级：JSON」入口');
+  check(chainRowsOf().length === 0, '没配链时不画行', String(chainRowsOf().length));
+
+  findByText(chainRoot, '＋ 本地 ComfyUI')?.click();
+  await tick(30);
+  check(chainRowsOf().length === 1, '点一下多出一档', String(chainRowsOf().length));
+  check(chainInputsOf(chainRowsOf()[0]).length === 3, '一行有名称 / 地址 / ckpt 三个输入框', String(chainInputsOf(chainRowsOf()[0]).length));
+  check(chainKindOfRow(chainRowsOf()[0])?.value === 'comfyui', '默认就是本地 ComfyUI 档', chainKindOfRow(chainRowsOf()[0])?.value);
+
+  let rowInputs = chainInputsOf(chainRowsOf()[0]);
+  rowInputs[1].value = 'http://127.0.0.1:8188';
+  fire(rowInputs[1], 'input');
+  rowInputs[2].value = 'sd_xl_base_1.0.safetensors';
+  fire(rowInputs[2], 'input');
+  findByText(chainRoot, '保存模型链')?.click();
+  await tick(40);
+  const chainWrite = chainEnv.state.configWrites[0];
+  check(chainWrite?.groupId === 'world:image', '保存写的是 world:image 配置组', JSON.stringify(chainEnv.state.configWrites.map((w) => w.groupId)));
+  let savedChain = null;
+  try {
+    savedChain = JSON.parse(chainWrite?.values?.['worlds.image.models'] ?? '');
+  } catch {
+    savedChain = null;
+  }
+  check(
+    Array.isArray(savedChain) && savedChain[0]?.preset === 'comfyui' && savedChain[0]?.ckpt === 'sd_xl_base_1.0.safetensors',
+    '存进去的还是标准 models JSON（面板只是换了编辑方式）',
+    JSON.stringify(savedChain),
+  );
+
+  // 从单档配置生成一档云端，再插一档本地，验证排序按钮
+  findByText(chainRoot, '用下面的单档配置生成一档')?.click();
+  await tick(30);
+  check(chainRowsOf().length === 1, '用单档配置能生成一档', String(chainRowsOf().length));
+  const fromSingle = chainInputsOf(chainRowsOf()[0]);
+  check(
+    fromSingle[1]?.value === 'https://api.openai.com/v1' && fromSingle[2]?.value === 'gpt-image-1',
+    '生成的那档带着单档的地址与模型名',
+    `${fromSingle[1]?.value} / ${fromSingle[2]?.value}`,
+  );
+
+  findByText(chainRoot, '＋ 本地 ComfyUI')?.click();
+  await tick(30);
+  check(chainRowsOf().length === 2, '两档并排', String(chainRowsOf().length));
+  const orderBefore = chainRowsOf().map(chainNameOf).join(',');
+  findByText(chainRowsOf()[0], '下移')?.click();
+  await tick(30);
+  const orderAfter = chainRowsOf().map(chainNameOf).join(',');
+  check(orderAfter === 'local,cloud' && orderBefore === 'cloud,local', '「下移」把两档换了位置', `${orderBefore} → ${orderAfter}`);
+
+  const wroteBefore = chainEnv.state.configWrites.length;
+  findByText(chainRoot, '保存模型链')?.click();
+  await tick(30);
+  check(
+    chainEnv.state.configWrites.length === wroteBefore && chainEnv.state.toasts.some((t) => t.text.includes('缺 ckpt')),
+    '缺 ckpt 时保存被拦下并说清原因',
+    JSON.stringify(chainEnv.state.toasts.map((t) => t.text)),
+  );
+  findByText(chainRoot, '删除')?.click();
+  await tick(30);
+  check(chainRowsOf().length >= 1, '「删除」能去掉一档', String(chainRowsOf().length));
 
   section('未知方法与面板');
   let threw = false;

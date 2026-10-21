@@ -20,6 +20,13 @@ const STYLE = `
 .iw-big img { max-width: 100%; max-height: 68vh; display: block; margin: 0 auto; }
 .iw-bigmeta { font-size: 12px; opacity: .7; margin: 8px 0; word-break: break-all; }
 .iw-prompt { font-size: 12px; white-space: pre-wrap; word-break: break-word; }
+.iw-chain { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+.iw-chainhead { display: grid; grid-template-columns: 24px 120px 150px 1fr 1fr 120px; gap: 6px; padding: 0 6px; font-size: 11px; opacity: .55; }
+.iw-chainrow { display: grid; grid-template-columns: 24px 120px 150px 1fr 1fr 120px; gap: 6px; align-items: center; padding: 6px; border: 1px solid rgba(128,128,128,.3); border-radius: 8px; }
+.iw-chainrow input, .iw-chainrow select { min-width: 0; width: 100%; box-sizing: border-box; }
+.iw-chainbad { grid-column: 1 / -1; color: #d9534f; font-size: 11px; }
+.iw-chaintools { display: flex; gap: 4px; }
+.iw-chaintools button { padding: 2px 6px; }
 `;
 
 const ZH = {
@@ -65,15 +72,40 @@ const ZH = {
   clearKeyBody: '会把 .env 里那一行置空。之后画图会直接失败，直到重新填入。',
   saveKey: '保存密钥',
   chainTitle: '模型链',
-  chainDesc: '按顺序试的一串后端：本地 ComfyUI 与云端 OpenAI 兼容接口可以放进同一个 JSON 数组，数组顺序就是优先级。前一档连不上、超时、额度用完、模型没装，就自动换下一档。留空则用下面那套单档配置。',
+  chainDesc: '画图时按这里的顺序挨个试：本地 ComfyUI 与云端 OpenAI 兼容接口可以混在一起，上面的先用。前一档连不上、超时、额度用完、模型没装，就自动换下一档。空着则用下面那套单档配置。',
   chainPlaceholder: '[{"name":"local","preset":"comfyui","baseUrl":"http://127.0.0.1:8188","ckpt":"sd_xl_base_1.0.safetensors"}]',
+  chainName: '名称',
+  chainKind: '类型',
+  chainBase: '地址',
+  chainWhere: '模型 / ckpt',
+  chainKindOpenai: '云端接口（OpenAI 兼容）',
+  chainKindComfyui: '本地 ComfyUI',
+  chainNamePlaceholder: 'local / cloud',
+  chainAddComfyui: '＋ 本地 ComfyUI',
+  chainAddCloud: '＋ 云端接口',
+  chainFromSingle: '用下面的单档配置生成一档',
+  chainJson: '高级：JSON',
+  chainJsonHint: '这里是原始的 worlds.image.models：workflow、loras、steps、denoise 这些高级字段直接在这改。',
+  chainJsonApply: '应用 JSON',
+  chainJsonBack: '收起 JSON',
+  chainJsonApplied: 'JSON 已读进来，点「保存模型链」才写进配置',
+  chainBroken: '这段 JSON 读不了',
+  chainBrokenHint: '先修好 JSON，或点「用下面的单档配置生成一档」把它覆盖掉。在保存之前配置不会动。',
+  chainEmptyHint: '还没有配模型链，现在用的是下面那套单档配置。想让本地 ComfyUI 和云端轮着试，点「＋ 本地 ComfyUI」或「＋ 云端接口」加一档。',
+  chainOrderHint: '从上到下就是优先级。',
+  chainNeedBase: '缺地址',
+  chainNeedCkpt: '缺 ckpt 文件名',
+  chainNeedModel: '缺模型名',
+  chainMoveUp: '上移',
+  chainMoveDown: '下移',
+  chainDel: '删除',
+  chainBad: '模型链没保存',
   chainSave: '保存模型链',
   chainSaved: '模型链已保存',
-  chainBad: '模型链存不上',
   chainTest: '测试模型链',
   chainTesting: '正在探活…',
+  chainTestDirty: '链上还有没保存的改动，先点「保存模型链」再测',
   chainTestNone: '还没测试。点「测试模型链」挨个试一下。',
-  chainEmpty: '没有配模型链（用的是下面那套单档配置）',
   endpoint: '接口地址',
   model: '模型',
   params: '默认参数',
@@ -172,15 +204,40 @@ const EN = {
   clearKeyBody: 'Empties that line in .env. Drawing will fail until a key is entered again.',
   saveKey: 'Save key',
   chainTitle: 'Model chain',
-  chainDesc: 'Backends tried in order: a local ComfyUI and OpenAI-compatible cloud endpoints can share one JSON array, and the array order is the priority. If one is unreachable, times out, runs out of quota or lacks the model, the next entry is tried. Empty means the single-backend settings below.',
+  chainDesc: 'Tried from top to bottom: a local ComfyUI and cloud OpenAI-compatible endpoints can be mixed in one list. If an entry is unreachable, times out, runs out of quota or lacks the model, the next one is tried. Empty means the single-backend settings below.',
   chainPlaceholder: '[{"name":"local","preset":"comfyui","baseUrl":"http://127.0.0.1:8188","ckpt":"sd_xl_base_1.0.safetensors"}]',
+  chainName: 'Name',
+  chainKind: 'Type',
+  chainBase: 'Endpoint',
+  chainWhere: 'Model / ckpt',
+  chainKindOpenai: 'Cloud (OpenAI-compatible)',
+  chainKindComfyui: 'Local ComfyUI',
+  chainNamePlaceholder: 'local / cloud',
+  chainAddComfyui: '+ Local ComfyUI',
+  chainAddCloud: '+ Cloud endpoint',
+  chainFromSingle: 'Create one from the single-backend settings',
+  chainJson: 'Advanced: JSON',
+  chainJsonHint: 'Raw worlds.image.models — edit workflow, loras, steps, denoise and other advanced fields here.',
+  chainJsonApply: 'Apply JSON',
+  chainJsonBack: 'Hide JSON',
+  chainJsonApplied: 'JSON loaded — press "Save chain" to write it',
+  chainBroken: 'This JSON will not parse',
+  chainBrokenHint: 'Fix it, or overwrite it with "Create one from…". Nothing changes until you save.',
+  chainEmptyHint: 'No model chain yet: the single-backend settings below are in use. Add a local ComfyUI or a cloud entry to mix them.',
+  chainOrderHint: 'Top to bottom is the priority order.',
+  chainNeedBase: 'missing endpoint',
+  chainNeedCkpt: 'missing ckpt file name',
+  chainNeedModel: 'missing model name',
+  chainMoveUp: 'Up',
+  chainMoveDown: 'Down',
+  chainDel: 'Remove',
+  chainBad: 'Model chain not saved',
   chainSave: 'Save chain',
   chainSaved: 'Model chain saved',
-  chainBad: 'Could not save the model chain',
   chainTest: 'Test chain',
   chainTesting: 'Probing…',
+  chainTestDirty: 'The chain has unsaved edits — press "Save chain" before testing',
   chainTestNone: 'Not tested yet. Press "Test chain" to try each entry.',
-  chainEmpty: 'No model chain configured (the single-backend settings below are used)',
   endpoint: 'Endpoint',
   model: 'Model',
   params: 'Defaults',
@@ -244,15 +301,49 @@ function message(err) {
   return String(err);
 }
 
-/** 模型链文本框：能解析就按两格缩进排好，解析不了就原样显示（让用户自己改）。 */
-function prettyChain(raw) {
+/** 模型链的 JSON：读坏了要能接着说清是哪坏，所以不抛异常，返回 `{entries, error}`。 */
+function parseChainJson(raw) {
   const value = String(raw ?? '').trim();
-  if (!value) return '';
+  if (!value) return { entries: [], error: '' };
   try {
-    return JSON.stringify(JSON.parse(value), null, 2);
-  } catch {
-    return value;
+    const parsed = JSON.parse(value);
+    if (!Array.isArray(parsed)) return { entries: [], error: 'not an array / 不是数组' };
+    const entries = parsed.filter((it) => it && typeof it === 'object' && !Array.isArray(it)).map((it) => ({ ...it }));
+    return { entries, error: '' };
+  } catch (err) {
+    return { entries: [], error: message(err) };
   }
+}
+
+/** 面板里编辑的是对象数组，落盘的仍是 `worlds.image.models` 的 JSON 文本。 */
+function chainToJson(entries) {
+  const list = entries.map((entry) => {
+    const out = { ...entry };
+    if (!String(out.preset ?? '').trim()) out.preset = 'openai';
+    return out;
+  });
+  return list.length ? JSON.stringify(list, null, 2) : '[]';
+}
+
+/** 一档是哪种：只认 comfyui，其余都当 OpenAI 兼容（和 src/chain.js 对齐）。 */
+function chainKindOf(entry) {
+  return String(entry?.preset ?? '').trim().toLowerCase() === 'comfyui' ? 'comfyui' : 'openai';
+}
+
+/** 这一档还差什么；齐了返回空串。 */
+function chainRowProblem(entry, tx) {
+  if (!String(entry?.baseUrl ?? '').trim()) return tx.chainNeedBase;
+  if (chainKindOf(entry) === 'comfyui' && !String(entry?.ckpt ?? '').trim()) return tx.chainNeedCkpt;
+  if (chainKindOf(entry) === 'openai' && !String(entry?.model ?? '').trim()) return tx.chainNeedModel;
+  return '';
+}
+
+/** 新加一档时别撞名：`local` → `local2` → `local3`。 */
+function chainUniqueName(base, list) {
+  const taken = new Set(list.map((it) => String(it?.name ?? '').trim()));
+  if (!taken.has(base)) return base;
+  for (let i = 2; i < 100; i += 1) if (!taken.has(`${base}${i}`)) return `${base}${i}`;
+  return `${base}-${Date.now().toString(36)}`;
 }
 
 function injectStyle(ctx) {
@@ -562,20 +653,198 @@ function statusPanel(ctx) {
   keyCard.appendChild(keyRow);
   body.appendChild(keyCard);
 
+  // 模型链：面板里是一串可排序的小卡片，落盘仍是 worlds.image.models 的 JSON。
+  let chainEdit = [];
+  let chainBroken = '';
+  let chainDirty = false;
+  let chainProbe = null;
+  let chainSingle = { baseUrl: '', model: '' };
+  let chainJsonShown = false;
+
   const chainCard = ctx.ui.section(tx.chainTitle, tx.chainDesc);
-  const chainInput = ctx.ui.textarea({ rows: 6, cls: 'mono', placeholder: tx.chainPlaceholder });
-  chainInput.dataset.dirty = '0';
-  chainInput.addEventListener('input', () => { chainInput.dataset.dirty = '1'; });
-  chainCard.appendChild(ctx.ui.field(tx.chainTitle, chainInput));
-  const chainRow = ctx.ui.actions();
-  const chainList = ctx.ui.h('div', 'iw-sub', tx.chainTestNone);
-  chainRow.append(
+  const chainOrderLine = ctx.ui.h('div', 'iw-sub', tx.chainOrderHint);
+  const chainHead = ctx.ui.h('div', 'iw-chainhead');
+  chainHead.append(
+    ctx.ui.h('span', null, '#'),
+    ctx.ui.h('span', null, tx.chainName),
+    ctx.ui.h('span', null, tx.chainKind),
+    ctx.ui.h('span', null, tx.chainBase),
+    ctx.ui.h('span', null, tx.chainWhere),
+    ctx.ui.h('span', null, ''),
+  );
+  const chainRows = ctx.ui.h('div', 'iw-chain');
+  const chainEmptyLine = ctx.ui.msgline(tx.chainEmptyHint);
+  const chainBar = ctx.ui.actions();
+  const chainTestBox = ctx.ui.h('div', 'iw-sub', tx.chainTestNone);
+  const chainJsonWrap = ctx.ui.h('div');
+  const chainJson = ctx.ui.textarea({ rows: 8, cls: 'mono', placeholder: tx.chainPlaceholder });
+  const chainJsonBar = ctx.ui.actions();
+  chainJsonWrap.append(
+    ctx.ui.h('div', 'iw-sub', tx.chainJsonHint),
+    chainJson,
+    chainJsonBar,
+  );
+  chainJsonBar.append(
+    ctx.ui.button(tx.chainJsonApply, { size: 'sm', onClick: () => { applyChainJson(); } }),
+    ctx.ui.button(tx.chainJsonBack, { size: 'sm', onClick: () => { toggleChainJson(false); } }),
+  );
+  chainJsonWrap.style.display = 'none';
+  chainBar.append(
     ctx.ui.button(tx.chainSave, { size: 'sm', variant: 'primary', onClick: () => { void saveChain(); } }),
     ctx.ui.button(tx.chainTest, { size: 'sm', onClick: () => { void testChain(); } }),
+    ctx.ui.button(tx.chainAddComfyui, { size: 'sm', onClick: () => { addChainEntry('comfyui'); } }),
+    ctx.ui.button(tx.chainAddCloud, { size: 'sm', onClick: () => { addChainEntry('openai'); } }),
+    ctx.ui.button(tx.chainFromSingle, { size: 'sm', onClick: () => { addChainEntry('single'); } }),
+    ctx.ui.button(tx.chainJson, { size: 'sm', onClick: () => { toggleChainJson(); } }),
   );
-  chainCard.appendChild(chainRow);
-  chainCard.appendChild(chainList);
+  chainCard.append(chainOrderLine, chainHead, chainRows, chainEmptyLine, chainBar, chainTestBox, chainJsonWrap);
   body.appendChild(chainCard);
+
+  /** 一行一档：名称、类型、地址、模型/ckpt，加排序与删除。 */
+  const chainRowOf = (entry, index) => {
+    const kind = chainKindOf(entry);
+    const row = ctx.ui.h('div', 'iw-chainrow');
+    row.appendChild(ctx.ui.h('span', 'iw-sub', String(index + 1)));
+
+    const bad = ctx.ui.h('div', 'iw-chainbad');
+    const syncBad = () => {
+      const problem = chainRowProblem(entry, tx);
+      bad.textContent = problem ? `第 ${index + 1} 档：${problem}` : '';
+      bad.style.display = problem ? '' : 'none';
+    };
+
+    const name = ctx.ui.input({ value: String(entry.name ?? ''), placeholder: tx.chainNamePlaceholder, cls: 'mono' });
+    name.addEventListener('input', () => {
+      entry.name = name.value.trim();
+      markChainDirty();
+    });
+
+    const kindSel = ctx.ui.select({ cls: 'mono' });
+    for (const pair of [['openai', tx.chainKindOpenai], ['comfyui', tx.chainKindComfyui]]) {
+      const opt = ctx.ui.h('option', null, pair[1]);
+      opt.value = pair[0];
+      kindSel.appendChild(opt);
+    }
+    kindSel.value = kind;
+    kindSel.addEventListener('change', () => {
+      entry.preset = kindSel.value === 'comfyui' ? 'comfyui' : 'openai';
+      markChainDirty();
+      renderChain();
+    });
+
+    const base = ctx.ui.input({
+      value: String(entry.baseUrl ?? ''),
+      placeholder: kind === 'comfyui' ? 'http://127.0.0.1:8188' : 'https://api.openai.com/v1',
+      cls: 'mono',
+    });
+    base.addEventListener('input', () => {
+      entry.baseUrl = base.value.trim();
+      markChainDirty();
+      syncBad();
+    });
+
+    const whereKey = kind === 'comfyui' ? 'ckpt' : 'model';
+    const where = ctx.ui.input({
+      value: String(entry[whereKey] ?? ''),
+      placeholder: kind === 'comfyui' ? 'sd_xl_base_1.0.safetensors' : 'gpt-image-1',
+      cls: 'mono',
+    });
+    where.addEventListener('input', () => {
+      entry[whereKey] = where.value.trim();
+      markChainDirty();
+      syncBad();
+    });
+
+    const tools = ctx.ui.h('div', 'iw-chaintools');
+    tools.append(
+      ctx.ui.button(tx.chainMoveUp, { size: 'sm', onClick: () => { moveChainEntry(index, -1); } }),
+      ctx.ui.button(tx.chainMoveDown, { size: 'sm', onClick: () => { moveChainEntry(index, 1); } }),
+      ctx.ui.button(tx.chainDel, { size: 'sm', onClick: () => { removeChainEntry(index); } }),
+    );
+
+    row.append(name, kindSel, base, where, tools, bad);
+    syncBad();
+    return row;
+  };
+
+  const renderChain = () => {
+    chainOrderLine.style.display = chainEdit.length ? '' : 'none';
+    chainHead.style.display = chainEdit.length ? '' : 'none';
+    chainEmptyLine.style.display = chainEdit.length || chainBroken ? 'none' : '';
+    chainRows.replaceChildren();
+    if (chainBroken) {
+      chainRows.appendChild(ctx.ui.h('div', 'iw-sub', `${tx.chainBroken}：${chainBroken}`));
+      chainRows.appendChild(ctx.ui.h('div', 'iw-sub', tx.chainBrokenHint));
+    }
+    chainEdit.forEach((entry, index) => chainRows.appendChild(chainRowOf(entry, index)));
+    chainJson.value = chainToJson(chainEdit);
+    chainTestBox.replaceChildren();
+    if (chainProbe?.error) chainTestBox.appendChild(ctx.ui.h('div', 'iw-sub', chainProbe.error));
+    for (const it of Array.isArray(chainProbe?.items) ? chainProbe.items : []) {
+      const line = ctx.ui.h('div', 'iw-sub');
+      line.appendChild(ctx.ui.pill(it.ok ? tx.setLabel : tx.unsetLabel, it.ok ? 'on' : 'off'));
+      line.appendChild(ctx.ui.h('span', null, ` ${it.name} · ${it.preset} — ${it.detail}`));
+      chainTestBox.appendChild(line);
+    }
+    if (!chainProbe) chainTestBox.textContent = tx.chainTestNone;
+  };
+
+  const markChainDirty = () => {
+    chainDirty = true;
+    chainProbe = null;
+    chainTestBox.replaceChildren();
+    chainTestBox.textContent = tx.chainTestNone;
+  };
+
+  const toggleChainJson = (force) => {
+    chainJsonShown = typeof force === 'boolean' ? force : !chainJsonShown;
+    chainJsonWrap.style.display = chainJsonShown ? '' : 'none';
+    if (chainJsonShown) chainJson.value = chainToJson(chainEdit);
+  };
+
+  const applyChainJson = () => {
+    const parsed = parseChainJson(chainJson.value);
+    chainEdit = parsed.entries;
+    chainBroken = parsed.error;
+    chainDirty = true;
+    chainProbe = null;
+    renderChain();
+    if (parsed.error) ctx.ui.toast(`${tx.chainBroken}：${parsed.error}`, 'bad');
+    else ctx.ui.toast(tx.chainJsonApplied, 'ok');
+  };
+
+  const addChainEntry = (kind) => {
+    const entry = kind === 'comfyui'
+      ? { name: chainUniqueName('local', chainEdit), preset: 'comfyui', baseUrl: 'http://127.0.0.1:8188', ckpt: '' }
+      : {
+          name: chainUniqueName('cloud', chainEdit),
+          preset: 'openai',
+          baseUrl: kind === 'single' ? chainSingle.baseUrl : '',
+          model: kind === 'single' ? chainSingle.model : '',
+        };
+    chainEdit.push(entry);
+    chainBroken = '';
+    chainDirty = true;
+    chainProbe = null;
+    renderChain();
+  };
+
+  const moveChainEntry = (index, delta) => {
+    const to = index + delta;
+    if (to < 0 || to >= chainEdit.length) return;
+    const [item] = chainEdit.splice(index, 1);
+    chainEdit.splice(to, 0, item);
+    chainDirty = true;
+    chainProbe = null;
+    renderChain();
+  };
+
+  const removeChainEntry = (index) => {
+    chainEdit.splice(index, 1);
+    chainDirty = true;
+    chainProbe = null;
+    renderChain();
+  };
 
   const patchCard = ctx.ui.section(tx.patchTitle, tx.patchDesc);
   const patchHead = ctx.ui.h('div', 'iw-conn');
@@ -681,19 +950,15 @@ function statusPanel(ctx) {
       { k: tx.runtime, v: `Node ${s?.node ?? '?'} · ${s?.platform ?? '?'}` },
     ]));
     keyInput.placeholder = s?.keySet ? tx.keyPlaceholderSet : tx.keyPlaceholder;
-    if (String(chainInput.dataset.dirty) !== '1') chainInput.value = prettyChain(s?.models);
-    chainList.replaceChildren();
-    const chain = Array.isArray(s?.chain) ? s.chain : [];
-    if (!chain.length) {
-      chainList.textContent = tx.chainEmpty;
-    } else {
-      for (const it of chain) {
-        const extra = it.model || it.baseUrl || '';
-        const line = ctx.ui.h('div', 'iw-sub');
-        line.appendChild(ctx.ui.pill(it.ok ? tx.setLabel : tx.unsetLabel, it.ok ? 'on' : 'off'));
-        line.appendChild(ctx.ui.h('span', null, ` ${it.name} · ${it.preset}${extra ? ` · ${extra}` : ''}${it.ok ? '' : ` — ${it.reason}`}`));
-        chainList.appendChild(line);
-      }
+    chainSingle = {
+      baseUrl: String(s?.single?.baseUrl ?? ''),
+      model: String(s?.single?.model ?? ''),
+    };
+    if (!chainDirty) {
+      const parsed = parseChainJson(s?.models);
+      chainEdit = parsed.entries;
+      chainBroken = parsed.error;
+      renderChain();
     }
     renderPatch(s?.patch);
   };
@@ -713,11 +978,20 @@ function statusPanel(ctx) {
   };
 
   const saveChain = async () => {
-    const value = chainInput.value.trim();
+    if (chainBroken) {
+      ctx.ui.toast(`${tx.chainBroken}：${chainBroken}`, 'bad');
+      return;
+    }
+    const missing = chainEdit.map((entry, index) => ({ index, problem: chainRowProblem(entry, tx) })).find((it) => it.problem);
+    if (missing) {
+      ctx.ui.toast(`${tx.chainBad}：第 ${missing.index + 1} 档${missing.problem}`, 'bad');
+      return;
+    }
     const release = ctx.ui.busy(tx.busier, tx.chainSave);
     try {
-      await ctx.setConfig('world:image', { 'worlds.image.models': value });
-      chainInput.dataset.dirty = '0';
+      await ctx.setConfig('world:image', { 'worlds.image.models': chainToJson(chainEdit) });
+      chainDirty = false;
+      chainProbe = null;
       note.textContent = tx.chainSaved;
       ctx.ui.toast(tx.chainSaved, 'ok');
       await load(false);
@@ -730,25 +1004,15 @@ function statusPanel(ctx) {
   };
 
   const testChain = async () => {
+    if (chainDirty) {
+      ctx.ui.toast(tx.chainTestDirty, 'bad');
+      return;
+    }
     const release = ctx.ui.busy(tx.chainTesting, tx.chainTest);
     try {
       const res = await ctx.invoke('probe', []);
-      chainList.replaceChildren();
-      if (res?.error) {
-        chainList.appendChild(ctx.ui.h('div', 'iw-sub', res.error));
-        return;
-      }
-      const items = Array.isArray(res?.items) ? res.items : [];
-      if (!items.length) {
-        chainList.textContent = tx.chainEmpty;
-        return;
-      }
-      for (const it of items) {
-        const line = ctx.ui.h('div', 'iw-sub');
-        line.appendChild(ctx.ui.pill(it.ok ? tx.setLabel : tx.unsetLabel, it.ok ? 'on' : 'off'));
-        line.appendChild(ctx.ui.h('span', null, ` ${it.name} · ${it.preset} — ${it.detail}`));
-        chainList.appendChild(line);
-      }
+      chainProbe = res && typeof res === 'object' ? res : { at: '', error: '', items: [] };
+      renderChain();
     } catch (err) {
       ctx.ui.toast(message(err), 'bad');
     } finally {

@@ -167,9 +167,9 @@ pet_say({ script: '看，画好了。', images: ['<句柄>'] })  // 气泡里说
 修法是抬版本 + 重启，主程序会在 Core 就绪时自动重载控制台外壳（
 `resources\app\app\main.cjs:285` `if (settings) settings.loadURL(consoleUrl());`）：
 
-1. 把 `package.json` 的 `version` 抬一格（例如 `0.4.0` → `0.4.1`）；
+1. 把 `package.json` 的 `version` 抬一格（例如 `0.4.1` → `0.4.2`）；
 2. 重启控制台（状态页「重启控制台」或 `node tools/patch.mjs --restart`）；
-3. 程序内窗口自动重载 → 新的 URL `/assets/extensions/cortico-world-image/0.4.0/webui.js`
+3. 程序内窗口自动重载 → 新的 URL `/assets/extensions/cortico-world-image/0.4.1/webui.js`
    取到新脚本，旧 URL 立刻变 404。
 
 不想抬版本也行，但要**先完全退出程序**再删缓存目录：`<安装>\data\Cache`、
@@ -205,7 +205,7 @@ registry 上有版本时直接从 npm 装；想自己改代码、或者 `npm vie
 或者用命令行，在 `data/extensions` 目录里（`extensions/package.json` 所在处）执行：
 
 ```powershell
-pnpm add cortico-world-image --ignore-workspace        # 想钉住版本就写 cortico-world-image@0.4.0
+pnpm add cortico-world-image --ignore-workspace        # 想钉住版本就写 cortico-world-image@0.4.1
 ```
 
 装完重启。升级同理：重跑一遍（控制台的「扩展」页会显示已装版本与最新版本），装完同样要重启。
@@ -282,6 +282,7 @@ pnpm add "D:\path\to\cortico-world-image" --ignore-workspace
 
 `worlds.image.models` 是一份 JSON 数组，**数组顺序就是优先级**。前档连不上、超时、额度用完、
 模型没装、参数不支持时自动换下一档；只有「内容审核拦了提示词」这类换谁都一样的错才不换。
+状态页的「模型链」卡片里它就是**一串小卡片**（见下），不用手写 JSON。
 
 ```json
 [
@@ -313,9 +314,12 @@ pnpm add "D:\path\to\cortico-world-image" --ignore-workspace
 工具参数 `model` 可以点名某一档（`name`、`ckpt` 或 `model` 三者之一）：点了名就**只用那一档**，
 失败了直接报错、不偷偷换——想让它自己挑就别传 `model`。
 
-状态页的「模型链」卡片能直接编辑这份 JSON（保存就是写 `worlds.image.models`），
+状态页的「模型链」卡片默认就是友好编辑：一档一张小卡片，填「名称 / 类型 / 地址 / 模型或 ckpt」，
+用「上移 / 下移」调优先级、「删除」去掉一档，「＋ 本地 ComfyUI」「＋ 云端接口」加档，
+「用下面的单档配置生成一档」把现有的单档设置抄成一档。保存就是写 `worlds.image.models`；
+`workflow`、`loras`、`steps` 这类高级字段点「高级：JSON」直接改原文。
 「测试模型链」会挨档探活：ComfyUI 看 `/system_stats` 并核对 `ckpt` 在不在，OpenAI 兼容看
-`/models`（端点没这条路由也算在线）。探活每档最多等 6 秒。
+`/models`（端点没这条路由也算在线）。探活每档最多等 6 秒；链上有没保存的改动时会先拦住。
 
 #### ComfyUI 这档会调哪些路
 
