@@ -107,6 +107,14 @@ const ZH = {
   chainAdvDenoise: 'denoise',
   chainAdvSampler: '采样器',
   chainAdvScheduler: '调度器',
+  chainAdvModel: '模型文件',
+  chainAdvModelHint: 'Anima、Flux 这类不是 all-in-one 的模型要分三个文件：UNet + 文本编码器 + VAE。填了 UNet 就忽略上面的 checkpoint；LoRA 只作用于 UNet（没有 CLIP 那一半）。',
+  chainAdvUnet: 'UNet，如 anima-base-v1.0.safetensors',
+  chainAdvTextEncoder: '文本编码器，如 qwen_3_06b_base.safetensors',
+  chainAdvTextEncoderType: '编码器类型',
+  chainAdvVae: 'VAE，如 qwen_image_vae.safetensors',
+  chainUnetInAdv: '已用高级参数里的裸 UNet',
+  chainNeedUnetParts: '裸 UNet 还差文本编码器 / VAE',
   chainJson: '高级：JSON',
   chainJsonHint: '这里是原始的 worlds.image.models：workflow、loras、steps、denoise 这些高级字段直接在这改。链空着打开时会填一份现成范例（本地 ComfyUI 带 LoRA + 云端各一档），把 ckpt / loras 换成你自己 models 里的文件名，先「应用 JSON」再「保存模型链」。',
   chainJsonApply: '应用 JSON',
@@ -255,6 +263,14 @@ const EN = {
   chainAdvDenoise: 'denoise',
   chainAdvSampler: 'sampler',
   chainAdvScheduler: 'scheduler',
+  chainAdvModel: 'Model files',
+  chainAdvModelHint: 'Anima / Flux are not all-in-one: they need a UNet, a text encoder and a VAE as three separate files. A UNet here overrides the checkpoint above; LoRAs then only touch the UNet (no CLIP half).',
+  chainAdvUnet: 'UNet, e.g. anima-base-v1.0.safetensors',
+  chainAdvTextEncoder: 'Text encoder, e.g. qwen_3_06b_base.safetensors',
+  chainAdvTextEncoderType: 'encoder type',
+  chainAdvVae: 'VAE, e.g. qwen_image_vae.safetensors',
+  chainUnetInAdv: 'using the bare UNet from Advanced',
+  chainNeedUnetParts: 'bare UNet still needs a text encoder / VAE',
   chainJson: 'Advanced: JSON',
   chainJsonHint: 'Raw worlds.image.models — edit workflow, loras, steps, denoise and other advanced fields here. With no chain yet it opens pre-filled with a working example (a local ComfyUI tier with LoRA plus a cloud tier); swap ckpt / loras for your own file names, then Apply JSON and Save chain.',
   chainJsonApply: 'Apply JSON',
@@ -442,9 +458,16 @@ function chainKindOf(entry) {
 /** 这一档还差什么；齐了返回空串。 */
 function chainRowProblem(entry, tx) {
   if (!String(entry?.baseUrl ?? '').trim()) return tx.chainNeedBase;
-  if (chainKindOf(entry) === 'comfyui' && !String(entry?.ckpt ?? '').trim()) return tx.chainNeedCkpt;
-  if (chainKindOf(entry) === 'openai' && !String(entry?.model ?? '').trim()) return tx.chainNeedModel;
-  return '';
+  if (chainKindOf(entry) === 'comfyui') {
+    // 自定义工作流自己写文件名，这里不挑毛病。
+    if (entry?.workflow) return '';
+    if (String(entry?.unet ?? '').trim()) {
+      const ok = String(entry?.textEncoder ?? '').trim() && String(entry?.vaeName ?? '').trim();
+      return ok ? '' : tx.chainNeedUnetParts;
+    }
+    return String(entry?.ckpt ?? '').trim() ? '' : tx.chainNeedCkpt;
+  }
+  return String(entry?.model ?? '').trim() ? '' : tx.chainNeedModel;
 }
 
 /** 新加一档时别撞名：`local` → `local2` → `local3`。 */
@@ -855,7 +878,10 @@ function statusPanel(ctx) {
     const whereKey = kind === 'comfyui' ? 'ckpt' : 'model';
     const where = ctx.ui.input({
       value: String(entry[whereKey] ?? ''),
-      placeholder: kind === 'comfyui' ? 'sd_xl_base_1.0.safetensors' : 'gpt-image-1',
+      placeholder:
+        kind === 'comfyui'
+          ? (String(entry.unet ?? '').trim() ? tx.chainUnetInAdv : 'sd_xl_base_1.0.safetensors')
+          : 'gpt-image-1',
       cls: 'mono',
     });
     where.addEventListener('input', () => {
@@ -1009,6 +1035,29 @@ function statusPanel(ctx) {
       ctx.ui.field(tx.chainAdvScheduler, pick('scheduler', ['normal', 'karras', 'exponential', 'sgm_uniform', 'simple', 'ddim_uniform'], 'normal')),
     );
     box.appendChild(grid);
+
+    // 裸 UNet 三件套（Anima / Flux）：三个文件 + 编码器类型。填了 UNet 就顶掉上面的 ckpt。
+    const textField = (key, placeholder) => {
+      const el = ctx.ui.input({ value: String(entry[key] ?? ''), placeholder, cls: 'mono' });
+      el.addEventListener('input', () => {
+        const v = el.value.trim();
+        if (v) entry[key] = v;
+        else delete entry[key];
+        markChainDirty();
+      });
+      return el;
+    };
+    const modelGrid = ctx.ui.h('div', 'iw-chainadvgrid');
+    modelGrid.append(
+      ctx.ui.field(tx.chainAdvUnet, textField('unet', 'anima-base-v1.0.safetensors')),
+      ctx.ui.field(tx.chainAdvTextEncoder, textField('textEncoder', 'qwen_3_06b_base.safetensors')),
+      ctx.ui.field(
+        tx.chainAdvTextEncoderType,
+        pick('textEncoderType', ['stable_diffusion', 'sd3', 'flux', 'qwen_image', 'cosmos', 'lumina2'], 'stable_diffusion'),
+      ),
+      ctx.ui.field(tx.chainAdvVae, textField('vaeName', 'qwen_image_vae.safetensors')),
+    );
+    box.append(ctx.ui.h('div', 'iw-sub', tx.chainAdvModel), modelGrid, ctx.ui.h('div', 'iw-sub', tx.chainAdvModelHint));
     return box;
   };
 

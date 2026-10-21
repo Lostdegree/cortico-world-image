@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { ImageApiError, editImage, generateImage } from './api.js';
 import { ChainError, chainSnapshot, entryLabel, entryState, parseChainEntries, runChain } from './chain.js';
 import { applyChatImagePatches, consolePort, patchBackupStatus, requestConsoleRestart, resolveAppRoot, restoreChatImagePatches } from './chat-image-patch.js';
-import { comfyDraw, comfyEdit, listCheckpoints, probe as probeComfy } from './comfyui.js';
+import { comfyDraw, comfyEdit, listModels, probe as probeComfy } from './comfyui.js';
 import { DEFAULTS, ID, configGroup, text } from './config.js';
 import { Gallery } from './gallery.js';
 import { samplePng } from './png.js';
@@ -448,6 +448,10 @@ export class ImageWorld {
       const res = await comfyDraw({
         baseUrl: entry.baseUrl,
         ckpt: entry.ckpt,
+        unet: entry.unet,
+        textEncoder: entry.textEncoder,
+        textEncoderType: entry.textEncoderType,
+        vaeName: entry.vaeName,
         loras: entry.loras,
         negative: entry.negative,
         prompt,
@@ -484,6 +488,10 @@ export class ImageWorld {
       const res = await comfyEdit({
         baseUrl: entry.baseUrl,
         ckpt: entry.ckpt,
+        unet: entry.unet,
+        textEncoder: entry.textEncoder,
+        textEncoderType: entry.textEncoderType,
+        vaeName: entry.vaeName,
         loras: entry.loras,
         negative: entry.negative,
         prompt,
@@ -772,14 +780,38 @@ export class ImageWorld {
           if (preset === 'comfyui') {
             const probe = await probeComfy(entry.baseUrl, { timeoutMs: cap(entry.timeoutMs) });
             if (!probe.ok) return { name, preset, ok: false, detail: probe.error };
-            const ckpts = await listCheckpoints(entry.baseUrl, { timeoutMs: cap(entry.timeoutMs) });
+            const where = probe.gpu ? `（${probe.gpu}）` : '';
+            // 自定义工作流里的文件名都写在模板里，这里只确认服务在线。
+            if (entry.workflow) return { name, preset, ok: true, detail: `在线${where} · 自定义工作流` };
+            const files = await listModels(entry.baseUrl, { timeoutMs: cap(entry.timeoutMs) });
+            // 拿不到清单（老版本 / 路由没有）就只报在线，不硬说文件不在。
+            if (entry.unet) {
+              const miss = [];
+              const check = (list, value, hint) => {
+                if (!value || !list.length || list.includes(value)) return;
+                miss.push(`${hint}：${value}`);
+              };
+              check(files.unets, entry.unet, '没有这个 UNet');
+              check(files.textEncoders, entry.textEncoder, '没有这个文本编码器');
+              check(files.vaes, entry.vaeName, '没有这个 VAE');
+              const label = `${entry.unet} + ${entry.textEncoder || '?'} + ${entry.vaeName || '?'}`;
+              return {
+                name,
+                preset,
+                ok: miss.length === 0,
+                detail: miss.length
+                  ? `在线，但${miss.join('、')}（那边有 ${files.unets.length} 个 UNet / ${files.textEncoders.length} 个文本编码器 / ${files.vaes.length} 个 VAE）`
+                  : `在线${where} · ${label}${files.unets.length ? '' : '（没拿到模型清单，未核对）'}`,
+              };
+            }
+            const ckpts = files.checkpoints;
             const has = !ckpts.length || ckpts.includes(entry.ckpt);
             return {
               name,
               preset,
               ok: has,
               detail: has
-                ? `在线${probe.gpu ? `（${probe.gpu}）` : ''} · ${entry.ckpt || '没写 ckpt'}`
+                ? `在线${where} · ${entry.ckpt || '没写 ckpt'}`
                 : `在线，但没有这个 ckpt：${entry.ckpt}（那边装了 ${ckpts.length} 个）`,
             };
           }

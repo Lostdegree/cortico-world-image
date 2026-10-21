@@ -66,6 +66,10 @@ export function parseChainEntries(raw, legacy = {}) {
     denoise: 0.6,
     negative: '',
     ckpt: '',
+    unet: '',
+    textEncoder: '',
+    textEncoderType: 'stable_diffusion',
+    vaeName: '',
     loras: [],
     workflow: null,
     edit: true,
@@ -126,10 +130,15 @@ export function parseChainEntries(raw, legacy = {}) {
 function normalize(item, index, defaults, warnings, single) {
   const src = item && typeof item === 'object' ? item : {};
   const ckpt = asText(src.ckpt ?? src.checkpoint);
-  const preset = asText(src.preset, ckpt ? 'comfyui' : 'openai').toLowerCase();
+  // 裸 UNet 三件套（Anima / Flux 这类不是 all-in-one 的模型）：填了 unet 就不看 ckpt。
+  const unet = asText(src.unet ?? src.unetName ?? src.diffusionModel);
+  const preset = asText(src.preset, ckpt || unet ? 'comfyui' : 'openai').toLowerCase();
   const known = PRESETS.includes(preset);
   if (!known) warnings.push(`第 ${index + 1} 档的 preset「${preset}」不认识，只能是 ${PRESETS.join(' / ')}`);
-  const name = asText(src.name, ckpt || asText(src.model) || (single ? 'default' : `${PRESET_LABEL[preset] ?? preset}#${index + 1}`));
+  const name = asText(
+    src.name,
+    ckpt || unet || asText(src.model) || (single ? 'default' : `${PRESET_LABEL[preset] ?? preset}#${index + 1}`),
+  );
   return {
     name,
     preset: known ? preset : 'openai',
@@ -141,6 +150,10 @@ function normalize(item, index, defaults, warnings, single) {
     format: asText(src.format, defaults.format),
     timeoutMs: Math.max(5000, Math.min(1800000, asNumber(src.timeoutMs, defaults.timeoutMs))),
     ckpt: preset === 'comfyui' ? ckpt : '',
+    unet: preset === 'comfyui' ? unet : '',
+    textEncoder: preset === 'comfyui' ? asText(src.textEncoder ?? src.clip ?? src.textEncoderName) : '',
+    textEncoderType: asText(src.textEncoderType, defaults.textEncoderType),
+    vaeName: preset === 'comfyui' ? asText(src.vaeName ?? src.vae) : '',
     loras: Array.isArray(src.loras) ? src.loras : (src.loras ? [src.loras] : []),
     negative: asText(src.negative, defaults.negative),
     steps: Math.max(1, Math.min(150, Math.round(asNumber(src.steps, defaults.steps)))),
@@ -156,16 +169,30 @@ function normalize(item, index, defaults, warnings, single) {
 
 /** 给人看的名字：优先 `name`，其次 ckpt / model。 */
 export function entryLabel(entry) {
-  return asText(entry?.name) || asText(entry?.ckpt) || asText(entry?.model) || asText(entry?.preset, '模型');
+  return asText(entry?.name) || asText(entry?.ckpt) || asText(entry?.unet) || asText(entry?.model) || asText(entry?.preset, '模型');
 }
 
-/** 一档的「能不能用」：ComfyUI 只要求地址，OpenAI 兼容还要求有密钥。 */
+/**
+ * 一档的「能不能用」：ComfyUI 要求地址 + 模型文件（ckpt，或裸 UNet 三件套，或自定义工作流），
+ * OpenAI 兼容还要求有密钥。
+ */
 export function entryState(entry, { apiKey = '' } = {}) {
   if (!entry) return { ok: false, reason: '没有这一档' };
   if (!entry.enabled) return { ok: false, reason: '已停用' };
   if (!entry.baseUrl) return { ok: false, reason: '没配地址' };
   if (entry.preset === 'openai' && !apiKey) return { ok: false, reason: `没有密钥（${entry.apiKeySecret || 'IMAGE_API_KEY'}）` };
-  if (entry.preset === 'comfyui' && !entry.ckpt) return { ok: false, reason: '没配 ckpt（checkpoint 文件名）' };
+  if (entry.preset === 'comfyui') {
+    // 自定义工作流：节点和文件名都写在模板里，插件不校验。
+    if (entry.workflow) return { ok: true, reason: '' };
+    if (entry.unet) {
+      if (!entry.textEncoder) return { ok: false, reason: '裸 UNet 还差文本编码器（text_encoders 里的文件名）' };
+      if (!entry.vaeName) return { ok: false, reason: '裸 UNet 还差 VAE（vae 里的文件名）' };
+      return { ok: true, reason: '' };
+    }
+    if (!entry.ckpt) {
+      return { ok: false, reason: '没配 ckpt（checkpoint 文件名）；Anima 这类裸 UNet 模型就填 unet + textEncoder + vae' };
+    }
+  }
   return { ok: true, reason: '' };
 }
 
@@ -177,7 +204,7 @@ export function entryState(entry, { apiKey = '' } = {}) {
 export async function runChain(entries, runner, { only = '' } = {}) {
   const wanted = asText(only);
   const queue = wanted
-    ? entries.filter((entry) => entry.name === wanted || entry.ckpt === wanted || entry.model === wanted)
+    ? entries.filter((entry) => entry.name === wanted || entry.ckpt === wanted || entry.unet === wanted || entry.model === wanted)
     : entries;
   if (!queue.length) {
     throw new ChainError(wanted ? `没有叫「${wanted}」的模型档` : '模型链是空的：去「图片工坊 → 状态 → 模型链」里配一档', []);
@@ -225,7 +252,7 @@ export function chainSnapshot(entries, { keys = new Map(), probe = null } = {}) 
       name: entryLabel(entry),
       preset: entry.preset,
       baseUrl: entry.baseUrl,
-      model: entry.preset === 'comfyui' ? entry.ckpt : entry.model,
+      model: entry.preset === 'comfyui' ? entry.ckpt || entry.unet : entry.model,
       ok: state.ok,
       reason: state.reason,
       ...(entry.preset === 'comfyui' && probe ? { probe } : {}),

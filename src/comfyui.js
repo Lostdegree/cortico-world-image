@@ -224,10 +224,91 @@ export function img2ImgWorkflow(opts = {}) {
 }
 
 /**
+ * 裸 UNet 三件套（Anima、Flux 这类不是 all-in-one 的模型）的文生图工作流。
+ *
+ * 节点照 ComfyUI 官方模板摆：`UNETLoader` + `CLIPLoader` + `VAELoader`，
+ * LoRA 用 `LoraLoaderModelOnly`（Anima 的 LoRA 只改 UNet，没有 CLIP 那一半）。
+ */
+export function unetTxt2ImgWorkflow(opts = {}) {
+  const { width, height } = sizeToWH(opts.size);
+  return unetGraph(opts, { width, height, image: '' });
+}
+
+/** 裸 UNet 的图生图：先把参考图 `LoadImage` → 缩放 → `VAEEncode`，再按 denoise 重画。 */
+export function unetImg2ImgWorkflow(opts = {}) {
+  const { width, height } = sizeToWH(opts.size);
+  return unetGraph(opts, { width, height, image: String(opts.image ?? '') });
+}
+
+function unetGraph(opts, { width, height, image }) {
+  const loras = parseLoras(opts.loras);
+  const nodes = {
+    1: {
+      class_type: 'UNETLoader',
+      inputs: { unet_name: String(opts.unet ?? ''), weight_dtype: String(opts.weightDtype ?? 'default') },
+    },
+    2: {
+      class_type: 'CLIPLoader',
+      inputs: {
+        clip_name: String(opts.textEncoder ?? ''),
+        type: String(opts.textEncoderType ?? 'stable_diffusion'),
+        device: 'default',
+      },
+    },
+    3: { class_type: 'VAELoader', inputs: { vae_name: String(opts.vaeName ?? '') } },
+  };
+
+  let model = ['1', 0];
+  loras.forEach((lora, i) => {
+    const id = String(20 + i);
+    nodes[id] = {
+      class_type: 'LoraLoaderModelOnly',
+      inputs: { model, lora_name: lora.name, strength_model: lora.strength },
+    };
+    model = [id, 0];
+  });
+
+  nodes[5] = { class_type: 'CLIPTextEncode', inputs: { text: String(opts.prompt ?? ''), clip: ['2', 0] } };
+  nodes[6] = { class_type: 'CLIPTextEncode', inputs: { text: String(opts.negative ?? DEFAULT_NEGATIVE), clip: ['2', 0] } };
+
+  let latent;
+  if (image) {
+    nodes[10] = { class_type: 'LoadImage', inputs: { image } };
+    nodes[11] = {
+      class_type: 'ImageScale',
+      inputs: { image: ['10', 0], upscale_method: 'lanczos', width, height, crop: 'disabled' },
+    };
+    nodes[12] = { class_type: 'VAEEncode', inputs: { pixels: ['11', 0], vae: ['3', 0] } };
+    latent = ['12', 0];
+  } else {
+    nodes[7] = { class_type: 'EmptyLatentImage', inputs: { width, height, batch_size: 1 } };
+    latent = ['7', 0];
+  }
+
+  nodes[8] = {
+    class_type: 'KSampler',
+    inputs: {
+      seed: Math.max(0, Math.floor(finite(Number(opts.seed), Math.random() * 2 ** 31))),
+      steps: Math.max(1, Math.min(150, Math.round(finite(Number(opts.steps), 30)))),
+      cfg: Math.max(0, Math.min(30, finite(Number(opts.cfg), 4))),
+      sampler_name: String(opts.sampler ?? 'euler'),
+      scheduler: String(opts.scheduler ?? 'simple'),
+      denoise: image ? Math.max(0.05, Math.min(1, finite(Number(opts.denoise), 0.6))) : 1,
+      model,
+      positive: ['5', 0],
+      negative: ['6', 0],
+      latent_image: latent,
+    },
+  };
+  nodes[9] = { class_type: 'VAEDecode', inputs: { samples: ['8', 0], vae: ['3', 0] } };
+  nodes[13] = { class_type: 'SaveImage', inputs: { filename_prefix: String(opts.prefix ?? 'coopanion'), images: ['9', 0] } };
+  return nodes;
+}
+
+/**
  * 自定义工作流模板的占位符替换：`"{{prompt}}"` 整串等于占位符时直接换成对应**类型**的值，
  * 其余字符串里做文本插值；认不出的占位符原样留着（方便人肉排查）。
- */
-export function applyVars(node, vars) {
+ */export function applyVars(node, vars) {
   if (typeof node === 'string') {
     const exact = /^\{\{\s*([\w.-]+)\s*\}\}$/.exec(node);
     if (exact && Object.prototype.hasOwnProperty.call(vars, exact[1])) return vars[exact[1]];
@@ -244,7 +325,8 @@ export function applyVars(node, vars) {
 
 /** 自定义模板能用的占位符（写进自描述/文档，也在这里当唯一口径）。 */
 export const WORKFLOW_VARS = [
-  'prompt', 'negative', 'ckpt', 'width', 'height', 'size', 'steps', 'cfg',
+  'prompt', 'negative', 'ckpt', 'unet', 'textEncoder', 'textEncoderType', 'vaeName',
+  'width', 'height', 'size', 'steps', 'cfg',
   'sampler', 'scheduler', 'seed', 'denoise', 'image', 'loras', 'prefix', 'filename',
 ];
 
@@ -403,6 +485,31 @@ export async function listCheckpoints(baseUrl, { timeoutMs = 15000 } = {}) {
   }
 }
 
+/**
+ * 一次性问清 ComfyUI 装了哪些模型文件：all-in-one 的 checkpoint，以及裸 UNet 那三类
+ * （`diffusion_models` 的 UNet、`text_encoders` 的文本编码器、`vae`）。
+ *
+ * 拿不到就返回空数组——探活只当「没核对」，不当失败。
+ */
+export async function listModels(baseUrl, { timeoutMs = 15000 } = {}) {
+  const empty = { checkpoints: [], unets: [], textEncoders: [], vaes: [] };
+  try {
+    const json = await requestJson(at(baseUrl, 'object_info'), { timeoutMs });
+    const pick = (type, field) => {
+      const names = json?.[type]?.input?.required?.[field]?.[0];
+      return Array.isArray(names) ? names.map(String) : [];
+    };
+    return {
+      checkpoints: pick('CheckpointLoaderSimple', 'ckpt_name'),
+      unets: pick('UNETLoader', 'unet_name'),
+      textEncoders: pick('CLIPLoader', 'clip_name'),
+      vaes: pick('VAELoader', 'vae_name'),
+    };
+  } catch {
+    return empty;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // 组合：一张图 = 模板 → 提交 → 等 → 取
 // ---------------------------------------------------------------------------
@@ -417,7 +524,9 @@ export async function comfyDraw(opts = {}) {
   const { width, height } = sizeToWH(opts.size);
   const workflow = opts.workflow
     ? applyVars(opts.workflow, workflowVars(opts, { width, height, image: '', filename: '' }))
-    : txt2ImgWorkflow(opts);
+    : opts.unet
+      ? unetTxt2ImgWorkflow(opts)
+      : txt2ImgWorkflow(opts);
   const promptId = await submitPrompt(opts.baseUrl, workflow, { timeoutMs: Math.min(timeoutMs, 30000) });
   const picked = await waitForImages(opts.baseUrl, promptId, { timeoutMs, onTick: opts.onTick });
   const { bytes, mime } = await fetchImage(opts.baseUrl, picked, { timeoutMs: Math.min(timeoutMs, 60000) });
@@ -438,7 +547,9 @@ export async function comfyEdit(opts = {}) {
   );
   const workflow = opts.workflow
     ? applyVars(opts.workflow, workflowVars(opts, { width, height, image: uploaded, filename: uploaded }))
-    : img2ImgWorkflow({ ...opts, image: uploaded });
+    : opts.unet
+      ? unetImg2ImgWorkflow({ ...opts, image: uploaded })
+      : img2ImgWorkflow({ ...opts, image: uploaded });
   const promptId = await submitPrompt(opts.baseUrl, workflow, { timeoutMs: Math.min(timeoutMs, 30000) });
   const picked = await waitForImages(opts.baseUrl, promptId, { timeoutMs, onTick: opts.onTick });
   const { bytes, mime } = await fetchImage(opts.baseUrl, picked, { timeoutMs: Math.min(timeoutMs, 60000) });
@@ -452,6 +563,10 @@ function workflowVars(opts, { width, height, image, filename }) {
     prompt: String(opts.prompt ?? ''),
     negative: String(opts.negative ?? DEFAULT_NEGATIVE),
     ckpt: String(opts.ckpt ?? ''),
+    unet: String(opts.unet ?? ''),
+    textEncoder: String(opts.textEncoder ?? ''),
+    textEncoderType: String(opts.textEncoderType ?? 'stable_diffusion'),
+    vaeName: String(opts.vaeName ?? ''),
     width,
     height,
     size: `${width}x${height}`,

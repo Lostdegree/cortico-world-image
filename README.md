@@ -167,9 +167,9 @@ pet_say({ script: '看，画好了。', images: ['<句柄>'] })  // 气泡里说
 修法是抬版本 + 重启，主程序会在 Core 就绪时自动重载控制台外壳（
 `resources\app\app\main.cjs:285` `if (settings) settings.loadURL(consoleUrl());`）：
 
-1. 把 `package.json` 的 `version` 抬一格（例如 `0.4.1` → `0.4.2`）；
+1. 把 `package.json` 的 `version` 抬一格（例如 `0.5.0` → `0.5.1`）；
 2. 重启控制台（状态页「重启控制台」或 `node tools/patch.mjs --restart`）；
-3. 程序内窗口自动重载 → 新的 URL `/assets/extensions/cortico-world-image/0.4.2/webui.js`
+3. 程序内窗口自动重载 → 新的 URL `/assets/extensions/cortico-world-image/0.5.1/webui.js`
    取到新脚本，旧 URL 立刻变 404。
 
 不想抬版本也行，但要**先完全退出程序**再删缓存目录：`<安装>\data\Cache`、
@@ -205,7 +205,7 @@ registry 上有版本时直接从 npm 装；想自己改代码、或者 `npm vie
 或者用命令行，在 `data/extensions` 目录里（`extensions/package.json` 所在处）执行：
 
 ```powershell
-pnpm add cortico-world-image --ignore-workspace        # 想钉住版本就写 cortico-world-image@0.4.2
+pnpm add cortico-world-image --ignore-workspace        # 想钉住版本就写 cortico-world-image@0.5.1
 ```
 
 装完重启。升级同理：重跑一遍（控制台的「扩展」页会显示已装版本与最新版本），装完同样要重启。
@@ -294,8 +294,9 @@ pnpm add "D:\path\to\cortico-world-image" --ignore-workspace
 留空 = 用上面那套单档 `baseUrl` + `model`。两种 `preset`：
 
 - `openai`：原有的 OpenAI 兼容接口（`/images/generations`、`/images/edits`），要密钥。
-- `comfyui`：本地 ComfyUI（默认 `http://127.0.0.1:8188`），**不要密钥**，但要写 `ckpt`
-  （checkpoint 文件名，就是 `ComfyUI/models/checkpoints/` 里那个文件名）。
+- `comfyui`：本地 ComfyUI（默认 `http://127.0.0.1:8188`），**不要密钥**，但要写模型文件：
+  `ckpt`（checkpoint 文件名，就是 `ComfyUI/models/checkpoints/` 里那个），或者 **裸 UNet 三件套**
+  `unet` + `textEncoder` + `vaeName`（Anima、Flux 这类不是 all-in-one 的模型；填了 `unet` 就不看 `ckpt`）。
 
 每档都能写这些。`baseUrl` / `model` / `apiKeySecret` / `size` / `quality` / `format` / `timeoutMs` 不写就继承
 `worlds.image` 的单档设置；其余（`ckpt`、`loras`、采样参数等）只有链里的档才有，按下面的默认值走：
@@ -305,7 +306,9 @@ pnpm add "D:\path\to\cortico-world-image" --ignore-workspace
 | `name` | 这一档的名字；面板与报错里用它，工具参数 `model` 也按它点名 |
 | `preset` | `openai` / `comfyui` |
 | `baseUrl` / `model` / `apiKeySecret` / `size` / `quality` / `format` / `timeoutMs` | 同上面那张表 |
-| `ckpt` | ComfyUI 的 checkpoint 文件名（`comfyui` 必填） |
+| `ckpt` | ComfyUI 的 checkpoint 文件名（`comfyui` 必填，除非写了 `unet`） |
+| `unet` / `textEncoder` / `vaeName` | 裸 UNet 三件套：`ComfyUI/models/diffusion_models`、`text_encoders`、`vae` 里的文件名。**填了 `unet` 就顶掉 `ckpt`**，只出裸 UNet 那份工作流 |
+| `textEncoderType` | `unet` 的文本编码器类型，默认 `stable_diffusion`；Qwen 系编码器填 `qwen_image`（还认 `sd3` / `flux` / `cosmos` / `lumina2`） |
 | `loras` | ComfyUI 的 LoRA：`["add_detail.safetensors:0.6", {"name":"x.safetensors","strength":0.4,"clipStrength":0.25}]`（名字带扩展名，文件得先在 ComfyUI 的 `models/loras` 里） |
 | `steps` / `cfg` / `sampler` / `scheduler` / `denoise` / `negative` | ComfyUI 采样参数（默认 25 / 7 / euler / normal / 0.6） |
 | `workflow` | 自定义 ComfyUI API 工作流（对象）。给了就整份替换内置模板，占位符见下 |
@@ -318,22 +321,25 @@ pnpm add "D:\path\to\cortico-world-image" --ignore-workspace
 状态页的「模型链」卡片默认就是友好编辑：一档一张小卡片，填「名称 / 类型 / 地址 / 模型或 ckpt」，
 用「上移 / 下移」调优先级、「删除」去掉一档，「＋ 本地 ComfyUI」「＋ 云端接口」加档。
 本地 ComfyUI 那档还多一个「高级参数」按钮：能加**多行 LoRA**（文件名 / 强度 / CLIP 强度，文件名要带
-扩展名、可带子目录），也能改 `negative`、`steps`、`cfg`、`sampler`、`scheduler`、`denoise`
-——存的就是该档的 `loras`、`negative`、`steps` 这些字段，等于面板版的「高级：JSON」。
+扩展名、可带子目录），也能改 `negative`、`steps`、`cfg`、`sampler`、`scheduler`、`denoise`，
+以及**裸 UNet 三件套**（`unet` / `textEncoder` / `textEncoderType` / `vaeName`；填了它就忽略这一档的 `ckpt`）
+——存的就是该档的 `loras`、`negative`、`steps`、`unet` 这些字段，等于面板版的「高级：JSON」。
 保存就是写 `worlds.image.models`；`workflow` 这类只能手写的字段仍点「高级：JSON」改原文——**链还空着时它自带一份现成范例**
 （一档本地 ComfyUI，带 `ckpt`、两条 LoRA、采样参数与负面提示；一档云端），
 把 `ckpt` / `loras` 换成自己 `models` 里的文件名，「应用 JSON」再「保存模型链」就能用。
-「测试模型链」会挨档探活：ComfyUI 看 `/system_stats` 并核对 `ckpt` 在不在，OpenAI 兼容看
-`/models`（端点没这条路由也算在线）。探活每档最多等 6 秒；链上有没保存的改动时会先拦住。
+「测试模型链」会挨档探活：ComfyUI 看 `/system_stats`，再用 `/object_info` 一次性核对 `ckpt`（或
+`unet` / `textEncoder` / `vaeName`）在不在；OpenAI 兼容看 `/models`（端点没这条路由也算在线）。
+探活每档最多等 6 秒；链上有没保存的改动时会先拦住。
 
 #### ComfyUI 这档会调哪些路
 
 `POST /prompt`（提交工作流）、`GET /history/<prompt_id>`（轮询等结果）、`GET /view?filename=…`
 （取成品图）、`POST /upload/image`（改图时把参考图放进 `input/`）、`POST /interrupt`（超时收尾）、
-`GET /system_stats`、`GET /object_info/CheckpointLoaderSimple`。
+`GET /system_stats`、`GET /object_info`（核对模型文件名，拿不到就跳过核对）。
 
 不会替你去下模型：checkpoint 与 LoRA 得先放进 ComfyUI 的 `models/checkpoints` 与 `models/loras`，
-`ckpt` 写文件名（在子目录里就写相对路径）。自定义 `workflow` 里可用的占位符：
+`ckpt` 写文件名（在子目录里就写相对路径）；裸 UNet 的三个文件放进 `models/diffusion_models`、
+`models/text_encoders`、`models/vae`。自定义 `workflow` 里可用的占位符：
 `prompt`、`negative`、`ckpt`、`width`、`height`、`size`、`steps`、`cfg`、`sampler`、`scheduler`、
 `seed`、`denoise`、`image`、`loras`、`prefix`、`filename`（写成 `{{prompt}}` 这样，认不出的原样留着）。
 

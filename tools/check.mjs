@@ -621,7 +621,7 @@ try {
   section('契约与自描述（框架 0.2）');
   const pkg = JSON.parse(readFileSync(join(pkgDir, 'package.json'), 'utf8'));
   const manifest = pkg.cortico ?? {};
-  check(/^0\.4\.\d+$/.test(pkg.version), 'version 在 0.4.x 线上', String(pkg.version));
+  check(/^0\.\d+\.\d+$/.test(pkg.version), 'version 是正常的 0.x 版本号', String(pkg.version));
   check(manifest.api === 6, 'cortico.api 是 6', String(manifest.api));
   check(manifest.webUiClient === 'dist/webui.js', 'webUiClient 指向 dist/webui.js', String(manifest.webUiClient));
   check(manifest.describe === 'describe.json', 'describe 指向 describe.json', String(manifest.describe));
@@ -950,6 +950,27 @@ try {
   check(!chainMod.entryState({ ...local, ckpt: '' }).ok, '缺 ckpt 的 comfyui 档不能用');
   check(!chainMod.entryState({ ...local, enabled: false }).ok, '停用的档不能用');
   check(!chainMod.entryState({ ...local, baseUrl: '' }).ok, '没地址的档不能用');
+  const unetEntry = {
+    ...local,
+    name: 'anima',
+    ckpt: '',
+    unet: 'anima-base-v1.0.safetensors',
+    textEncoder: 'qwen_3_06b_base.safetensors',
+    vaeName: 'qwen_image_vae.safetensors',
+  };
+  check(chainMod.entryState(unetEntry).ok, '裸 UNet 三件套齐了也能用（不需要 ckpt）');
+  check(!chainMod.entryState({ ...unetEntry, vaeName: '' }).ok, '裸 UNet 缺 VAE 不能用');
+  check(!chainMod.entryState({ ...unetEntry, textEncoder: '' }).ok, '裸 UNet 缺文本编码器不能用');
+  const parsedUnet = chainMod.parseChainEntries(
+    JSON.stringify([{ name: 'anima', baseUrl: 'http://127.0.0.1:8188', unet: 'anima-base-v1.0.safetensors', textEncoder: 'qwen_3_06b_base.safetensors', textEncoderType: 'qwen_image', vaeName: 'qwen_image_vae.safetensors' }]),
+  );
+  const pu = parsedUnet.entries[0] ?? {};
+  check(
+    parsedUnet.error === '' && pu.preset === 'comfyui' && pu.ckpt === '' && pu.unet === 'anima-base-v1.0.safetensors'
+      && pu.textEncoderType === 'qwen_image' && pu.vaeName === 'qwen_image_vae.safetensors',
+    '只有 unet 也算 comfyui 档（preset 自动推出来）',
+    JSON.stringify(pu),
+  );
   check(!chainMod.entryState(cloud).ok && chainMod.entryState(cloud).reason.includes('密钥'), 'openai 档没密钥不能用');
   check(chainMod.entryState(cloud, { apiKey: 'sk-x' }).ok, '给了密钥就能用');
 
@@ -1017,6 +1038,24 @@ try {
   const wf2 = comfy.img2ImgWorkflow({ ckpt: 'ck.safetensors', prompt: '猫', image: 'uploaded.png', denoise: 0.5 });
   check(wf2['10'].class_type === 'LoadImage' && wf2['10'].inputs.image === 'uploaded.png', '改图工作流读上传的图');
   check(wf2['3'].inputs.denoise === 0.5, 'denoise 透传到 KSampler');
+
+  // 裸 UNet 三件套（Anima、Flux 这类不是 all-in-one 的模型）
+  const wfU = comfy.unetTxt2ImgWorkflow({
+    unet: 'anima-base-v1.0.safetensors',
+    textEncoder: 'qwen_3_06b_base.safetensors',
+    textEncoderType: 'qwen_image',
+    vaeName: 'qwen_image_vae.safetensors',
+    prompt: '猫',
+    seed: 5,
+    loras: ['zoda.safetensors:0.9'],
+  });
+  check(wfU['1'].class_type === 'UNETLoader' && wfU['1'].inputs.unet_name === 'anima-base-v1.0.safetensors', '裸 UNet 工作流用 UNETLoader 装 unet');
+  check(wfU['2'].class_type === 'CLIPLoader' && wfU['2'].inputs.clip_name === 'qwen_3_06b_base.safetensors' && wfU['2'].inputs.type === 'qwen_image', '裸 UNet 工作流带文本编码器与类型');
+  check(wfU['3'].class_type === 'VAELoader' && wfU['3'].inputs.vae_name === 'qwen_image_vae.safetensors', '裸 UNet 工作流带 VAE');
+  check(wfU['20']?.class_type === 'LoraLoaderModelOnly' && wfU['8'].inputs.model[0] === '20', '裸 UNet 的 LoRA 用 LoraLoaderModelOnly 串在 model 上');
+  check(wfU['5'].inputs.clip[0] === '2' && !wfU['20'].inputs.clip, '裸 UNet 的 LoRA 不动文本编码器（没有 CLIP 那一半）');
+  const wfU2 = comfy.unetImg2ImgWorkflow({ unet: 'u.safetensors', textEncoder: 'c.safetensors', vaeName: 'v.safetensors', prompt: '改', image: 'up.png', denoise: 0.45 });
+  check(wfU2['10'].class_type === 'LoadImage' && wfU2['12'].class_type === 'VAEEncode' && wfU2['8'].inputs.denoise === 0.45, '裸 UNet 的改图走 LoadImage → VAEEncode → 图生图');
   check(comfy.WORKFLOW_VARS.includes('prompt') && comfy.WORKFLOW_VARS.includes('seed'), '自定义模板的占位符清单里有 prompt / seed');
   const applied = comfy.applyVars({ a: '{{prompt}}', b: ['{{seed}}', 3], c: 'x {{ nope }} y' }, { prompt: '猫', seed: 42 });
   check(applied.a === '猫' && applied.b[0] === 42 && applied.c === 'x {{ nope }} y', '模板变量替换：认识的换成值、不认识的留着', JSON.stringify(applied));
@@ -1064,6 +1103,30 @@ try {
     comfyCalls.length = 0;
     const probed = await comfy.probe('http://comfy.test', { timeoutMs: 3000 });
     check(probed.ok === false && String(probed.error).includes('404'), '探活失败要说清原因', JSON.stringify(probed));
+
+    // 一次性问清装了哪些模型文件（探活用它核对名字对不对）
+    globalThis.fetch = async (url) => {
+      const u = new URL(String(url));
+      if (u.pathname.startsWith('/object_info')) {
+        return jsonResponse({
+          CheckpointLoaderSimple: { input: { required: { ckpt_name: [['sd_xl_base_1.0.safetensors', 'juggernaut.safetensors']] } } },
+          UNETLoader: { input: { required: { unet_name: [['anima-base-v1.0.safetensors']] } } },
+          CLIPLoader: { input: { required: { clip_name: [['qwen_3_06b_base.safetensors']] } } },
+          VAELoader: { input: { required: { vae_name: [['qwen_image_vae.safetensors']] } } },
+        });
+      }
+      return new Response('nope', { status: 404 });
+    };
+    const listed = await comfy.listModels('http://comfy.test', { timeoutMs: 3000 });
+    check(
+      listed.checkpoints.length === 2 && listed.unets[0] === 'anima-base-v1.0.safetensors'
+        && listed.textEncoders[0] === 'qwen_3_06b_base.safetensors' && listed.vaes[0] === 'qwen_image_vae.safetensors',
+      'listModels 一次问清 checkpoint / UNet / 文本编码器 / VAE 四类文件',
+      JSON.stringify(listed),
+    );
+    globalThis.fetch = async () => new Response('nope', { status: 404 });
+    const listedNone = await comfy.listModels('http://comfy.test', { timeoutMs: 2000 });
+    check(listedNone.checkpoints.length === 0 && listedNone.unets.length === 0, '拿不到清单就返回空，不报错', JSON.stringify(listedNone));
   } finally {
     globalThis.fetch = realFetch;
   }
@@ -1190,7 +1253,7 @@ try {
     '高级面板里有 steps / cfg / denoise 三个数字框',
     JSON.stringify(advNumInputs.map((el) => el.placeholder)),
   );
-  check(advBox ? findAll(advBox, (el) => el.tagName === 'SELECT').length === 2 : false, '高级面板里有采样器 / 调度器两个下拉');
+  check(advBox ? findAll(advBox, (el) => el.tagName === 'SELECT').length === 3 : false, '高级面板里有采样器 / 调度器 / 编码器类型三个下拉');
   check(advBox ? findAll(advBox, (el) => el.tagName === 'TEXTAREA').length === 1 : false, '高级面板里有负面提示词输入区');
 
   findByText(advBox, '＋ LoRA')?.click();
@@ -1227,6 +1290,26 @@ try {
   samplerSel.value = 'dpmpp_2m';
   fire(samplerSel, 'change');
 
+  // 裸 UNet 三件套（Anima、Flux 这类）：高级参数里填三个文件名 + 编码器类型
+  const advAllInputs = findAll(advBox, (el) => el.tagName === 'INPUT');
+  const byPh = (ph) => advAllInputs.find((el) => el.placeholder === ph);
+  const unetInput = byPh('anima-base-v1.0.safetensors');
+  const teInput = byPh('qwen_3_06b_base.safetensors');
+  const vaeInput = byPh('qwen_image_vae.safetensors');
+  check(!!unetInput && !!teInput && !!vaeInput, '高级面板里有 UNet / 文本编码器 / VAE 三个输入框', JSON.stringify(advAllInputs.map((el) => el.placeholder)));
+  check(!!findByText(advBox, '模型文件'), '高级面板里有「模型文件」一节');
+  unetInput.value = 'anima-base-v1.0.safetensors';
+  fire(unetInput, 'input');
+  teInput.value = 'qwen_3_06b_base.safetensors';
+  fire(teInput, 'input');
+  vaeInput.value = 'qwen_image_vae.safetensors';
+  fire(vaeInput, 'input');
+  const advSelects = findAll(advBox, (el) => el.tagName === 'SELECT');
+  const teTypeSel = advSelects[2];
+  check(advSelects.length === 3 && teTypeSel?.value === 'stable_diffusion', '第三个下拉是编码器类型，默认 stable_diffusion', JSON.stringify(advSelects.map((el) => el.value)));
+  teTypeSel.value = 'qwen_image';
+  fire(teTypeSel, 'change');
+
   findByText(chainRoot, '保存模型链')?.click();
   await tick(40);
   let advSaved = null;
@@ -1249,6 +1332,14 @@ try {
       && advEntry?.negative === 'lowres, watermark' && advEntry?.sampler === 'dpmpp_2m',
     'steps / cfg / denoise / negative / sampler 都存进了那一档',
     JSON.stringify({ steps: advEntry?.steps, cfg: advEntry?.cfg, denoise: advEntry?.denoise, negative: advEntry?.negative, sampler: advEntry?.sampler }),
+  );
+  check(
+    advEntry?.unet === 'anima-base-v1.0.safetensors'
+      && advEntry?.textEncoder === 'qwen_3_06b_base.safetensors'
+      && advEntry?.textEncoderType === 'qwen_image'
+      && advEntry?.vaeName === 'qwen_image_vae.safetensors',
+    '裸 UNet 三件套与编码器类型也存进那一档',
+    JSON.stringify({ unet: advEntry?.unet, te: advEntry?.textEncoder, type: advEntry?.textEncoderType, vae: advEntry?.vaeName }),
   );
 
   // 再补一档空的本地档，验证缺 ckpt 时保存被拦
