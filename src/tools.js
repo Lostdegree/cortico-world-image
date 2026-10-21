@@ -11,7 +11,7 @@
 export const TOOL_SPECS = [
   {
     name: 'image_draw',
-    description: 'Draw a picture from a text description through the configured image API. '
+    description: 'Draw a picture from a text description through the configured model chain (a local ComfyUI, an OpenAI-compatible cloud endpoint, or both in priority order). '
       + 'The picture is saved to disk, attached to this conversation so you can see it, and shown in the Image Studio console page. '
       + 'The reply carries the absolute file path; hand that path to a channel tool such as qq_send_image to actually deliver the picture to someone.',
     tags: ['act'],
@@ -21,6 +21,10 @@ export const TOOL_SPECS = [
         prompt: {
           type: 'string',
           description: 'What to draw: subject, style, composition, lighting. Any language.',
+        },
+        model: {
+          type: 'string',
+          description: 'Optional chain entry name (for example "local" or "cloud"). Leave empty to try the chain in priority order.',
         },
         note: {
           type: 'string',
@@ -32,30 +36,31 @@ export const TOOL_SPECS = [
         },
         quality: {
           type: 'string',
-          description: 'Override the configured quality, e.g. low / medium / high.',
+          description: 'Override the configured quality, e.g. low / medium / high. Ignored by ComfyUI.',
         },
       },
       required: ['prompt'],
     },
     summary: {
-      zh: '按一段文字描述画一张新图，存到磁盘、贴进对话，并显示在作品页。',
-      en: 'Draw a new picture from a text description, save it to disk and show it in the conversation.',
+      zh: '按一段文字描述画一张新图（本地 ComfyUI 或云端接口，按模型链的顺序），存到磁盘、贴进对话，并显示在作品页。',
+      en: 'Draw a new picture from a text description through the model chain, save it to disk and show it in the conversation.',
     },
   },
   {
     name: 'image_edit',
-    description: 'Redraw an existing local picture with the image API, following a text instruction. '
+    description: 'Redraw an existing local picture following a text instruction, through the same model chain as image_draw. '
       + '`image` takes an absolute file path, or a picture id from image_gallery. '
-      + 'Works with endpoints that implement /images/edits (multipart upload) and with those that take a base64 `image` field on /images/generations instead (e.g. Aliyun Bailian).',
+      + 'OpenAI-compatible entries use /images/edits (multipart upload) or a base64 `image` field on /images/generations (e.g. Aliyun Bailian); ComfyUI entries upload the picture and run an img2img workflow.',
     tags: ['act'],
     parameters: {
       type: 'object',
       properties: {
         prompt: { type: 'string', description: 'What to change or how to restyle it.' },
         image: { type: 'string', description: 'Absolute path of the source picture, or a picture id from image_gallery.' },
+        model: { type: 'string', description: 'Optional chain entry name. Leave empty to try the chain in priority order.' },
         note: { type: 'string', description: 'Short label for the result in the studio list.' },
         size: { type: 'string', description: 'Override the configured size.' },
-        quality: { type: 'string', description: 'Override the configured quality.' },
+        quality: { type: 'string', description: 'Override the configured quality. Ignored by ComfyUI.' },
       },
       required: ['prompt', 'image'],
     },

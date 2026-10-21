@@ -14,7 +14,9 @@ import { extname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { ImageApiError, editImage, generateImage } from './api.js';
+import { ChainError, chainSnapshot, entryLabel, entryState, parseChainEntries, runChain } from './chain.js';
 import { applyChatImagePatches, consolePort, patchBackupStatus, requestConsoleRestart, resolveAppRoot, restoreChatImagePatches } from './chat-image-patch.js';
+import { comfyDraw, comfyEdit, listCheckpoints, probe as probeComfy } from './comfyui.js';
 import { DEFAULTS, ID, configGroup, text } from './config.js';
 import { Gallery } from './gallery.js';
 import { samplePng } from './png.js';
@@ -157,6 +159,38 @@ export class ImageWorld {
     return text(this.language);
   }
 
+  /**
+   * 解析模型链：`worlds.image.models`（JSON 数组）优先，空则退回旧的单档配置。
+   * 每次现读，控制台改完即生效。
+   */
+  #chain() {
+    return parseChainEntries(this.#raw('models'), {
+      baseUrl: this.#str('baseUrl'),
+      model: this.#str('model'),
+      apiKeySecret: this.#str('apiKeySecret'),
+      size: this.#str('size'),
+      quality: this.#str('quality'),
+      format: this.#str('format'),
+      timeoutMs: this.#num('timeoutMs', 10000, 900000),
+    });
+  }
+
+  /** 这一档现在能不能用（ComfyUI 只要地址 + ckpt，OpenAI 兼容还要求有密钥）。 */
+  #entryState(entry) {
+    return entryState(entry, { apiKey: this.#entryKey(entry) });
+  }
+
+  /** 能出图的那些档，顺序不变。 */
+  #usableEntries(entries, { forEdit = false } = {}) {
+    return entries.filter((entry) => this.#entryState(entry).ok && (!forEdit || entry.edit));
+  }
+
+  /** 一档都没有时，把每档差在哪拼成一句话。 */
+  #chainReasons(entries) {
+    const lines = entries.map((entry) => `- ${entryLabel(entry)}（${entry.preset}）：${this.#entryState(entry).reason || '可用'}`);
+    return lines.length ? `\n${lines.join('\n')}` : '模型链是空的，去「图片工坊 → 状态 → 模型链」里配一档';
+  }
+
   /** 图片根目录：配置了就用配置的（相对路径按 bot 目录解析），否则 <dataDir>/images。 */
   dir() {
     const raw = String(this.#raw('saveDir') ?? '').trim();
@@ -170,8 +204,7 @@ export class ImageWorld {
    * 先问部署 .env（`ctx.secret`），再退到同级 `providers/<端点>/.env`：
    * 机器上往往已经为画图建过一个端点，密钥名直接填那个就行，不必抄第二份。
    */
-  #keyLookup() {
-    const name = this.#str('apiKeySecret');
+  #keyLookup(name = this.#str('apiKeySecret')) {
     if (!name) return { name, value: '', from: '', provider: '' };
     let own = '';
     try {
@@ -187,6 +220,12 @@ export class ImageWorld {
       from: found.value ? 'provider' : '',
       provider: found.provider,
     };
+  }
+
+  /** 某一档要的密钥：先看这一档的 `apiKeySecret`，没写就用全局那个。 */
+  #entryKey(entry) {
+    const name = String(entry?.apiKeySecret ?? '').trim() || this.#str('apiKeySecret');
+    return name ? this.#keyLookup(name).value : '';
   }
 
   /** 扫 `<botDir>/../providers/<端点>/.env`，找同名变量。 */
@@ -219,15 +258,50 @@ export class ImageWorld {
 
   #envState() {
     const t = this.#text();
-    const baseUrl = this.#str('baseUrl');
-    const model = this.#str('model');
+    const { entries, error } = this.#chain();
     const key = this.#keyLookup();
-    const name = key.name;
-    const keySet = Boolean(key.value);
-    const extra = { keyFrom: key.from, keyProvider: key.provider };
-    if (!baseUrl) return { ok: false, baseUrl, model, name, keySet, detail: t.readyNoBase, ...extra };
-    if (!keySet) return { ok: false, baseUrl, model, name, keySet, detail: t.readyNoKey, ...extra };
-    return { ok: true, baseUrl, model, name, keySet, detail: t.readyOk(model), ...extra };
+    const base = {
+      name: key.name,
+      keySet: Boolean(key.value),
+      keyFrom: key.from,
+      keyProvider: key.provider,
+      baseUrl: '',
+      model: '',
+      chain: [],
+      chainError: error,
+    };
+    if (error) return { ...base, ok: false, detail: `${t.readyChainBad}：${error}` };
+    const states = entries.map((entry) => ({ entry, state: this.#entryState(entry) }));
+    const chain = states.map(({ entry, state }) => ({
+      name: entryLabel(entry),
+      preset: entry.preset,
+      baseUrl: entry.baseUrl,
+      model: entry.preset === 'comfyui' ? entry.ckpt : entry.model,
+      ok: state.ok,
+      reason: state.reason,
+    }));
+    const usable = states.filter((s) => s.state.ok).map((s) => s.entry);
+    if (!usable.length) {
+      const first = entries[0];
+      const bare = entries.length === 1 && !first?.baseUrl;
+      return {
+        ...base,
+        chain,
+        ok: false,
+        baseUrl: first?.baseUrl ?? '',
+        model: first ? entryLabel(first) : '',
+        detail: bare ? t.readyNoBase : `${t.readyNoChain}${this.#chainReasons(entries)}`,
+      };
+    }
+    const labels = usable.map(entryLabel);
+    return {
+      ...base,
+      chain,
+      ok: true,
+      baseUrl: usable[0].baseUrl,
+      model: labels[0],
+      detail: labels.length > 1 ? t.readyChain(labels.join(' → ')) : t.readyOk(labels[0]),
+    };
   }
 
   // -------------------------------------------------------------------------
@@ -272,38 +346,28 @@ export class ImageWorld {
   async #draw(args) {
     const prompt = asText(args.prompt);
     if (!prompt) return { text: '[image_draw 没执行] prompt 是空的。不想画就别调用。', failed: true };
-    const keyName = this.#str('apiKeySecret');
-    const key = this.apiKey();
-    if (!key) {
-      return {
-        text: `[image_draw 没执行] 没有配置 ${keyName}：请在控制台「图片工坊 → 状态」里填入密钥（或在部署 .env 里写 ${keyName}=...）。`,
-        failed: true,
-      };
-    }
-    const model = this.#str('model');
-    const size = asText(args.size) || this.#str('size');
-    const quality = asText(args.quality) || this.#str('quality');
+    const { entries, error } = this.#chain();
+    if (error) return { text: `[image_draw 没执行] ${error}`, failed: true };
+    const usable = this.#usableEntries(entries);
+    if (!usable.length) return { text: `[image_draw 没执行] 没有能出图的一档：${this.#chainReasons(entries)}`, failed: true };
+    const named = asText(args.model);
+    const size = asText(args.size);
+    const quality = asText(args.quality);
     this.#busy += 1;
     try {
-      const res = await generateImage({
-        baseUrl: this.#str('baseUrl'),
-        apiKey: key,
-        model,
-        prompt,
-        size,
-        quality,
-        format: this.#str('format'),
-        timeoutMs: this.#num('timeoutMs', 10000, 900000),
-      });
+      const res = await runChain(usable, (entry) => this.#generateWith(entry, { prompt, size, quality }), { only: named });
+      const used = res.entry;
+      const label = entryLabel(used);
       const shown = res.revisedPrompt ? String(res.revisedPrompt) : prompt;
       const note = asText(args.note);
+      const dims = size || used.size || 'auto';
       const { item, warning } = this.#saveSafe({
         bytes: res.bytes,
         mime: res.mime,
         prompt: shown,
         note,
-        model,
-        size: size || 'auto',
+        model: label,
+        size: dims,
         source: 'api',
       });
       return this.#outcome({
@@ -312,10 +376,11 @@ export class ImageWorld {
         mime: res.mime,
         prompt: shown,
         note,
-        model,
-        size: size || 'auto',
+        model: label,
+        size: dims,
         item,
         warning,
+        attempts: res.attempts,
       });
     } catch (err) {
       return this.#failure('image_draw', err);
@@ -334,37 +399,28 @@ export class ImageWorld {
         failed: true,
       };
     }
-    const key = this.apiKey();
-    if (!key) {
-      return { text: `[image_edit 没执行] 没有配置 ${this.#str('apiKeySecret')}。`, failed: true };
-    }
-    const model = this.#str('model');
-    const size = asText(args.size) || this.#str('size');
-    const quality = asText(args.quality) || this.#str('quality');
+    const { entries, error } = this.#chain();
+    if (error) return { text: `[image_edit 没执行] ${error}`, failed: true };
+    const usable = this.#usableEntries(entries, { forEdit: true });
+    if (!usable.length) return { text: `[image_edit 没执行] 没有能改图的一档：${this.#chainReasons(entries)}`, failed: true };
+    const named = asText(args.model);
+    const size = asText(args.size);
+    const quality = asText(args.quality);
     this.#busy += 1;
     try {
-      const res = await editImage({
-        baseUrl: this.#str('baseUrl'),
-        apiKey: key,
-        model,
-        prompt,
-        image: readFileSync(local.path),
-        mime: local.mime,
-        name: local.path.split(/[\\/]/).pop(),
-        size,
-        quality,
-        format: this.#str('format'),
-        timeoutMs: this.#num('timeoutMs', 10000, 900000),
-      });
+      const res = await runChain(usable, (entry) => this.#editWith(entry, { prompt, size, quality, local }), { only: named });
+      const used = res.entry;
+      const label = entryLabel(used);
       const shown = res.revisedPrompt ? String(res.revisedPrompt) : prompt;
       const note = asText(args.note);
+      const dims = size || used.size || 'auto';
       const { item, warning } = this.#saveSafe({
         bytes: res.bytes,
         mime: res.mime,
         prompt: shown,
         note,
-        model,
-        size: size || 'auto',
+        model: label,
+        size: dims,
         source: 'edit',
       });
       return this.#outcome({
@@ -373,16 +429,96 @@ export class ImageWorld {
         mime: res.mime,
         prompt: shown,
         note,
-        model,
-        size: size || 'auto',
+        model: label,
+        size: dims,
         item,
         warning,
+        attempts: res.attempts,
       });
     } catch (err) {
       return this.#failure('image_edit', err);
     } finally {
       this.#busy -= 1;
     }
+  }
+
+  /** 用一档后端画一张新图。 */
+  async #generateWith(entry, { prompt, size, quality }) {
+    if (entry.preset === 'comfyui') {
+      const res = await comfyDraw({
+        baseUrl: entry.baseUrl,
+        ckpt: entry.ckpt,
+        loras: entry.loras,
+        negative: entry.negative,
+        prompt,
+        size: size || entry.size,
+        steps: entry.steps,
+        cfg: entry.cfg,
+        sampler: entry.sampler,
+        scheduler: entry.scheduler,
+        workflow: entry.workflow,
+        prefix: 'coopanion',
+        timeoutMs: entry.timeoutMs,
+      });
+      return { bytes: res.bytes, mime: res.mime, revisedPrompt: null, promptId: res.promptId };
+    }
+    const key = this.#entryKey(entry);
+    if (!key) {
+      throw new ImageApiError(`没有配置 ${entry.apiKeySecret || this.#str('apiKeySecret')}：在「图片工坊 → 状态」里填入密钥，或在部署 .env 里写这个变量`, { status: 401 });
+    }
+    return await generateImage({
+      baseUrl: entry.baseUrl,
+      apiKey: key,
+      model: entry.model,
+      prompt,
+      size: size || entry.size,
+      quality: quality || entry.quality,
+      format: entry.format,
+      timeoutMs: entry.timeoutMs,
+    });
+  }
+
+  /** 用一档后端改一张已有的图。 */
+  async #editWith(entry, { prompt, size, quality, local }) {
+    if (entry.preset === 'comfyui') {
+      const res = await comfyEdit({
+        baseUrl: entry.baseUrl,
+        ckpt: entry.ckpt,
+        loras: entry.loras,
+        negative: entry.negative,
+        prompt,
+        image: readFileSync(local.path),
+        mime: local.mime,
+        name: local.path.split(/[\\/]/).pop(),
+        size: size || entry.size,
+        denoise: entry.denoise,
+        steps: entry.steps,
+        cfg: entry.cfg,
+        sampler: entry.sampler,
+        scheduler: entry.scheduler,
+        workflow: entry.workflow,
+        prefix: 'coopanion',
+        timeoutMs: entry.timeoutMs,
+      });
+      return { bytes: res.bytes, mime: res.mime, revisedPrompt: null, promptId: res.promptId };
+    }
+    const key = this.#entryKey(entry);
+    if (!key) {
+      throw new ImageApiError(`没有配置 ${entry.apiKeySecret || this.#str('apiKeySecret')}`, { status: 401 });
+    }
+    return await editImage({
+      baseUrl: entry.baseUrl,
+      apiKey: key,
+      model: entry.model,
+      prompt,
+      image: readFileSync(local.path),
+      mime: local.mime,
+      name: local.path.split(/[\\/]/).pop(),
+      size: size || entry.size,
+      quality: quality || entry.quality,
+      format: entry.format,
+      timeoutMs: entry.timeoutMs,
+    });
   }
 
   async #list(args) {
@@ -457,6 +593,9 @@ export class ImageWorld {
     const lines = [spec.verb];
     if (spec.item) lines.push(`文件：${spec.item.path}`);
     lines.push(`参数：${spec.size || '默认尺寸'} · ${spec.model || '默认模型'} · ${kb} KB`);
+    if (Array.isArray(spec.attempts) && spec.attempts.length) {
+      lines.push(`前几档没成：${spec.attempts.map((it) => `${it.name}（${it.message}）`).join('；')}`);
+    }
     if (spec.note) lines.push(`名字：${spec.note}`);
     if (spec.prompt) lines.push(`画面：${spec.prompt}`);
     if (spec.warning) lines.push(spec.warning);
@@ -562,6 +701,7 @@ export class ImageWorld {
     if (panel === 'status') {
       switch (method) {
         case 'state': return this.#state();
+        case 'probe': return await this.#probeChain();
         case 'repatch': return this.#repatch();
         case 'restore': return this.#restore();
         case 'restart': return this.#askRestart('控制台手动请求');
@@ -599,12 +739,72 @@ export class ImageWorld {
       keyFrom: env.keyFrom,
       keyProvider: env.keyProvider,
       detail: env.detail,
+      models: this.#raw('models'),
+      chain: env.chain,
+      chainError: env.chainError,
       patch: {
         ...PATCH_STATE,
         packageDir: PACKAGE_DIR,
         backups: patchBackupStatus(PATCH_STATE.appRoot || resolveAppRoot([PACKAGE_DIR, process.cwd()])),
       },
     };
+  }
+
+  /**
+   * 逐个探活：ComfyUI 看 `/system_stats`（顺带核对 ckpt 在不在），
+   * OpenAI 兼容看 `/models`（有的端点没这条路由，当作不判定）。
+   * 「状态」页的「测试模型链」用它；只返回结果，不改配置。
+   */
+  async #probeChain() {
+    const { entries, error } = this.#chain();
+    const at = new Date().toISOString();
+    if (error) return { at, error, items: [] };
+    // 探活是给人在面板上点的，宁可「说不清」也不能把 RPC 拖到超时：
+    // 每档最多 6 秒、几档并行，最慢一次也就 6 秒出结果。
+    const cap = (ms) => Math.max(1000, Math.min(Number(ms) > 0 ? Number(ms) : 6000, 6000));
+    const items = await Promise.all(
+      entries.map(async (entry) => {
+        const name = entryLabel(entry);
+        const preset = entry.preset;
+        try {
+          const state = this.#entryState(entry);
+          if (!state.ok) return { name, preset, ok: false, detail: state.reason };
+          if (preset === 'comfyui') {
+            const probe = await probeComfy(entry.baseUrl, { timeoutMs: cap(entry.timeoutMs) });
+            if (!probe.ok) return { name, preset, ok: false, detail: probe.error };
+            const ckpts = await listCheckpoints(entry.baseUrl, { timeoutMs: cap(entry.timeoutMs) });
+            const has = !ckpts.length || ckpts.includes(entry.ckpt);
+            return {
+              name,
+              preset,
+              ok: has,
+              detail: has
+                ? `在线${probe.gpu ? `（${probe.gpu}）` : ''} · ${entry.ckpt || '没写 ckpt'}`
+                : `在线，但没有这个 ckpt：${entry.ckpt}（那边装了 ${ckpts.length} 个）`,
+            };
+          }
+          const key = this.#entryKey(entry);
+          const target = `${String(entry.baseUrl ?? '').replace(/[/\s]+$/, '')}/models`;
+          const res = await fetch(target, {
+            headers: key ? { Authorization: `Bearer ${key}` } : {},
+            signal: AbortSignal.timeout(cap(entry.timeoutMs)),
+          });
+          return {
+            name,
+            preset,
+            ok: res.ok || res.status === 404,
+            detail: res.ok
+              ? `在线 · ${entry.model}`
+              : res.status === 404
+                ? `端点没有 /models，跳过检查 · ${entry.model}`
+                : `返回 ${res.status} · ${entry.model}`,
+          };
+        } catch (err) {
+          return { name, preset, ok: false, detail: `连不上：${msg(err)}` };
+        }
+      }),
+    );
+    return { at, error: '', items };
   }
 
   /**

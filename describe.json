@@ -2,13 +2,17 @@
   "tools": [
     {
       "name": "image_draw",
-      "description": "Draw a picture from a text description through the configured image API. The picture is saved to disk, attached to this conversation so you can see it, and shown in the Image Studio console page. The reply carries the absolute file path; hand that path to a channel tool such as qq_send_image to actually deliver the picture to someone.",
+      "description": "Draw a picture from a text description through the configured model chain (a local ComfyUI, an OpenAI-compatible cloud endpoint, or both in priority order). The picture is saved to disk, attached to this conversation so you can see it, and shown in the Image Studio console page. The reply carries the absolute file path; hand that path to a channel tool such as qq_send_image to actually deliver the picture to someone.",
       "parameters": {
         "type": "object",
         "properties": {
           "prompt": {
             "type": "string",
             "description": "What to draw: subject, style, composition, lighting. Any language."
+          },
+          "model": {
+            "type": "string",
+            "description": "Optional chain entry name (for example \"local\" or \"cloud\"). Leave empty to try the chain in priority order."
           },
           "note": {
             "type": "string",
@@ -20,7 +24,7 @@
           },
           "quality": {
             "type": "string",
-            "description": "Override the configured quality, e.g. low / medium / high."
+            "description": "Override the configured quality, e.g. low / medium / high. Ignored by ComfyUI."
           }
         },
         "required": [
@@ -31,13 +35,13 @@
         "act"
       ],
       "summary": {
-        "zh": "按一段文字描述画一张新图，存到磁盘、贴进对话，并显示在作品页。",
-        "en": "Draw a new picture from a text description, save it to disk and show it in the conversation."
+        "zh": "按一段文字描述画一张新图（本地 ComfyUI 或云端接口，按模型链的顺序），存到磁盘、贴进对话，并显示在作品页。",
+        "en": "Draw a new picture from a text description through the model chain, save it to disk and show it in the conversation."
       }
     },
     {
       "name": "image_edit",
-      "description": "Redraw an existing local picture with the image API, following a text instruction. `image` takes an absolute file path, or a picture id from image_gallery. Works with endpoints that implement /images/edits (multipart upload) and with those that take a base64 `image` field on /images/generations instead (e.g. Aliyun Bailian).",
+      "description": "Redraw an existing local picture following a text instruction, through the same model chain as image_draw. `image` takes an absolute file path, or a picture id from image_gallery. OpenAI-compatible entries use /images/edits (multipart upload) or a base64 `image` field on /images/generations (e.g. Aliyun Bailian); ComfyUI entries upload the picture and run an img2img workflow.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -49,6 +53,10 @@
             "type": "string",
             "description": "Absolute path of the source picture, or a picture id from image_gallery."
           },
+          "model": {
+            "type": "string",
+            "description": "Optional chain entry name. Leave empty to try the chain in priority order."
+          },
           "note": {
             "type": "string",
             "description": "Short label for the result in the studio list."
@@ -59,7 +67,7 @@
           },
           "quality": {
             "type": "string",
-            "description": "Override the configured quality."
+            "description": "Override the configured quality. Ignored by ComfyUI."
           }
         },
         "required": [
@@ -126,7 +134,7 @@
       "key": "worlds.image.envPrompt",
       "title": "环境说明（图片工坊）",
       "role": "envPrompt",
-      "content": "你可以作画。这一节说明工具箱和规矩。\n\n## 四个工具\n\n- `image_draw`：按一段文字描述画一张新图。图会存到磁盘、附加进本次对话（你自己看得到）、并显示在控制台「图片工坊 → 作品」页。\n- `image_edit`：拿一张已有的图按指令改（换风格、改细节）。`image` 给绝对路径，或 `image_gallery` 里的编号。服务端支不支持改图由接口决定，报错就照实告诉用户。\n- `image_gallery`：列出画过的图，最新的在前，带编号和绝对路径。编号可以交给 `image_show` 或 `image_edit`。\n- `image_show`：把一张旧图重新放回眼前（重新附加进对话，并在作品页高亮）。\n\n图片保存目录：`{{image.dir | 尚未确定；先看控制台「图片工坊 → 状态」。}}`\n\n当前接口状态：`{{image.ready | 未知。不确定就别调用，先告诉用户去控制台「图片工坊 → 状态」看看。}}`\n\n## 规矩\n\n1. **别每轮都画。** 用户明确想看/想让你画，或者确实需要一张图来解释、来送人，才调用。闲聊、讨论、解释概念都不需要配图。\n2. **一次画一张。** 想要不同方向就画一张、看一眼、再决定要不要重画或改。不要一次调好几个 `image_draw` 碰运气。\n3. **描述要具体。** 主体、画风、构图、光线、色调、背景，一句到位；别只给两三个词，也别把整段聊天记录塞进去。\n4. **说人话，不念路径。** 回执里的绝对路径是给工具用的，不是给用户看的。画完就用一句自然的话告诉用户画了什么，像 `pet_say` 那样说话。不要把路径、编号、`blobs`、JSON 念出来，也不要贴 Markdown 图片语法。\n5. **发到别处要另走一步。** 图默认只在你自己的界面里。\n   - 想让主人在控制台的「对话」页看到它，画完之后调桌宠的 `pet_say`，`images` 填回执里 `[blob …]` 行的句柄（就是 `[blob ` 后面那一串），`script` 给空串就只贴图不出声；想配一句话就写进 `script`（那句话会在气泡里说出来）。图只进「对话」页，不进气泡。\n   - 要发到 QQ 会话：把回执里 `[blob …]` 行的句柄交给 QQ 世界的发图工具。官方 QQ 扩展用 `qq_draft`（`image` 填句柄，`to` 填 `group:<群号>` 或 `private:<QQ号>`，再用 `qq_confirm` 确认发送）；旧版 QQ 扩展（`qqbot`）用 `qq_send_image`，`image` 填回执里的绝对路径。\n6. **失败就停。** 如果回执说没配密钥、接口报错、超时，不要换个说法反复重试。把情况告诉用户，让他去控制台「图片工坊 → 状态」里填密钥或改接口地址。\n7. **别凭空说画好了。** 只有工具回执真的带着图回来，才算画好了。\n"
+      "content": "你可以作画。这一节说明工具箱和规矩。\n\n## 四个工具\n\n- `image_draw`：按一段文字描述画一张新图。图会存到磁盘、附加进本次对话（你自己看得到）、并显示在控制台「图片工坊 → 作品」页。\n- `image_edit`：拿一张已有的图按指令改（换风格、改细节）。`image` 给绝对路径，或 `image_gallery` 里的编号。服务端支不支持改图由接口决定，报错就照实告诉用户。\n- `image_gallery`：列出画过的图，最新的在前，带编号和绝对路径。编号可以交给 `image_show` 或 `image_edit`。\n- `image_show`：把一张旧图重新放回眼前（重新附加进对话，并在作品页高亮）。\n\n图片保存目录：`{{image.dir | 尚未确定；先看控制台「图片工坊 → 状态」。}}`\n\n当前接口状态：`{{image.ready | 未知。不确定就别调用，先告诉用户去控制台「图片工坊 → 状态」看看。}}`\n\n## 模型链\n\n后台可能配了一串模型（「图片工坊 → 状态 → 模型链」），本地 ComfyUI 和云端接口都在里面，按顺序试：\n前一档连不上、超时、额度用完、模型没装，就自动换下一档；回执里会写「前几档没成」和最后用的是哪一档。\n\n## 规矩\n\n1. **别每轮都画。** 用户明确想看/想让你画，或者确实需要一张图来解释、来送人，才调用。闲聊、讨论、解释概念都不需要配图。\n2. **一次画一张。** 想要不同方向就画一张、看一眼、再决定要不要重画或改。不要一次调好几个 `image_draw` 碰运气。\n3. **描述要具体。** 主体、画风、构图、光线、色调、背景，一句到位；别只给两三个词，也别把整段聊天记录塞进去。\n4. **说人话，不念路径。** 回执里的绝对路径是给工具用的，不是给用户看的。画完就用一句自然的话告诉用户画了什么，像 `pet_say` 那样说话。不要把路径、编号、`blobs`、JSON 念出来，也不要贴 Markdown 图片语法。\n5. **发到别处要另走一步。** 图默认只在你自己的界面里。\n   - 想让主人在控制台的「对话」页看到它，画完之后调桌宠的 `pet_say`，`images` 填回执里 `[blob …]` 行的句柄（就是 `[blob ` 后面那一串），`script` 给空串就只贴图不出声；想配一句话就写进 `script`（那句话会在气泡里说出来）。图只进「对话」页，不进气泡。\n   - 要发到 QQ 会话：把回执里 `[blob …]` 行的句柄交给 QQ 世界的发图工具。官方 QQ 扩展用 `qq_draft`（`image` 填句柄，`to` 填 `group:<群号>` 或 `private:<QQ号>`，再用 `qq_confirm` 确认发送）；旧版 QQ 扩展（`qqbot`）用 `qq_send_image`，`image` 填回执里的绝对路径。\n6. **失败就停。** 如果回执说没配密钥、接口报错、超时，不要换个说法反复重试。把情况告诉用户，让他去控制台「图片工坊 → 状态」里填密钥或改接口地址。\n7. **别凭空说画好了。** 只有工具回执真的带着图回来，才算画好了。\n"
     }
   ]
 }

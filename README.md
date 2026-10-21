@@ -22,8 +22,8 @@
 
 | 工具 | 标签 | 作用 |
 | --- | --- | --- |
-| `image_draw` | `act` | 按文字描述画一张新图，落盘、记进索引 |
-| `image_edit` | `act` | 拿一张已有的图按指令改（支持上传改图，或阿里云百炼式的 `image` 扩展字段） |
+| `image_draw` | `act` | 按文字描述画一张新图，落盘、记进索引（可带 `model` 点名用哪一档） |
+| `image_edit` | `act` | 拿一张已有的图按指令改（支持上传改图，或阿里云百炼式的 `image` 扩展字段；同样能带 `model`） |
 | `image_gallery` | `read` | 列出画过的图，带编号与绝对路径 |
 | `image_show` | `speak` | 把一张旧图重新放回对话与作品页 |
 
@@ -167,9 +167,9 @@ pet_say({ script: '看，画好了。', images: ['<句柄>'] })  // 气泡里说
 修法是抬版本 + 重启，主程序会在 Core 就绪时自动重载控制台外壳（
 `resources\app\app\main.cjs:285` `if (settings) settings.loadURL(consoleUrl());`）：
 
-1. 把 `package.json` 的 `version` 抬一格（例如 `0.3.1` → `0.3.2`）；
+1. 把 `package.json` 的 `version` 抬一格（例如 `0.4.0` → `0.4.1`）；
 2. 重启控制台（状态页「重启控制台」或 `node tools/patch.mjs --restart`）；
-3. 程序内窗口自动重载 → 新的 URL `/assets/extensions/cortico-world-image/0.3.1/webui.js`
+3. 程序内窗口自动重载 → 新的 URL `/assets/extensions/cortico-world-image/0.4.0/webui.js`
    取到新脚本，旧 URL 立刻变 404。
 
 不想抬版本也行，但要**先完全退出程序**再删缓存目录：`<安装>\data\Cache`、
@@ -205,7 +205,7 @@ registry 上有版本时直接从 npm 装；想自己改代码、或者 `npm vie
 或者用命令行，在 `data/extensions` 目录里（`extensions/package.json` 所在处）执行：
 
 ```powershell
-pnpm add cortico-world-image --ignore-workspace        # 想钉住版本就写 cortico-world-image@0.3.1
+pnpm add cortico-world-image --ignore-workspace        # 想钉住版本就写 cortico-world-image@0.4.0
 ```
 
 装完重启。升级同理：重跑一遍（控制台的「扩展」页会显示已装版本与最新版本），装完同样要重启。
@@ -266,9 +266,10 @@ pnpm add "D:\path\to\cortico-world-image" --ignore-workspace
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
 | `enabled` | `false` | 是否把四个工具挂给桌宠 |
-| `baseUrl` | `https://api.openai.com/v1` | OpenAI 兼容的图片接口根地址 |
+| `baseUrl` | `https://api.openai.com/v1` | OpenAI 兼容的图片接口根地址（没配 `models` 时用它） |
 | `apiKeySecret` | `IMAGE_API_KEY` | 密钥的**变量名**：先看部署 `.env`，再退到同级的端点 `.env` |
-| `model` | `gpt-image-1` | 模型名 |
+| `model` | `gpt-image-1` | 模型名（没配 `models` 时用它） |
+| `models` | 空 | 模型链：一串后端按优先级顺序试，见下面「模型链」（0.4.0 起） |
 | `size` | `1024x1024` | 尺寸，`auto` 或留空就不发这个参数 |
 | `quality` | `auto` | `low`/`medium`/`high` 或 `standard`/`hd`；`auto` 不发 |
 | `format` | `png` | 接口没给格式时按这个存盘（`png`/`jpeg`/`webp`） |
@@ -276,6 +277,56 @@ pnpm add "D:\path\to\cortico-world-image" --ignore-workspace
 | `saveDir` | 空 | 留空 = 本插件数据目录下的 `images/` |
 | `keep` | `200` | 超出后自动删最旧的，`0` = 不清理 |
 | `pushToConsole` | `true` | 画完实时推给「作品」页 |
+
+### 模型链：一串后端按顺序试（0.4.0）
+
+`worlds.image.models` 是一份 JSON 数组，**数组顺序就是优先级**。前档连不上、超时、额度用完、
+模型没装、参数不支持时自动换下一档；只有「内容审核拦了提示词」这类换谁都一样的错才不换。
+
+```json
+[
+  { "name": "local", "preset": "comfyui", "baseUrl": "http://127.0.0.1:8188", "ckpt": "sd_xl_base_1.0.safetensors" },
+  { "name": "cloud", "preset": "openai", "baseUrl": "https://api.openai.com/v1", "model": "gpt-image-1" }
+]
+```
+
+留空 = 用上面那套单档 `baseUrl` + `model`。两种 `preset`：
+
+- `openai`：原有的 OpenAI 兼容接口（`/images/generations`、`/images/edits`），要密钥。
+- `comfyui`：本地 ComfyUI（默认 `http://127.0.0.1:8188`），**不要密钥**，但要写 `ckpt`
+  （checkpoint 文件名，就是 `ComfyUI/models/checkpoints/` 里那个文件名）。
+
+每档都能写这些（不写的继承 `worlds.image` 的同名项）：
+
+| 键 | 说明 |
+| --- | --- |
+| `name` | 这一档的名字；面板与报错里用它，工具参数 `model` 也按它点名 |
+| `preset` | `openai` / `comfyui` |
+| `baseUrl` / `model` / `apiKeySecret` / `size` / `quality` / `format` / `timeoutMs` | 同上面那张表 |
+| `ckpt` | ComfyUI 的 checkpoint 文件名（`comfyui` 必填） |
+| `loras` | ComfyUI 的 LoRA：`["add_detail:0.6", {"name":"x.safetensors","strength":0.4}]` |
+| `steps` / `cfg` / `sampler` / `scheduler` / `denoise` / `negative` | ComfyUI 采样参数（默认 25 / 7 / euler / normal / 0.6） |
+| `workflow` | 自定义 ComfyUI API 工作流（对象）。给了就整份替换内置模板，占位符见下 |
+| `edit` | `false` = 这一档只用来画、不接改图（改图会跳到下一档） |
+| `enabled` | `false` = 跳过这一档 |
+
+工具参数 `model` 可以点名某一档（`name`、`ckpt` 或 `model` 三者之一）：点了名就**只用那一档**，
+失败了直接报错、不偷偷换——想让它自己挑就别传 `model`。
+
+状态页的「模型链」卡片能直接编辑这份 JSON（保存就是写 `worlds.image.models`），
+「测试模型链」会挨档探活：ComfyUI 看 `/system_stats` 并核对 `ckpt` 在不在，OpenAI 兼容看
+`/models`（端点没这条路由也算在线）。探活每档最多等 6 秒。
+
+#### ComfyUI 这档会调哪些路
+
+`POST /prompt`（提交工作流）、`GET /history/<prompt_id>`（轮询等结果）、`GET /view?filename=…`
+（取成品图）、`POST /upload/image`（改图时把参考图放进 `input/`）、`POST /interrupt`（超时收尾）、
+`GET /system_stats`、`GET /object_info/CheckpointLoaderSimple`。
+
+不会替你去下模型：checkpoint 与 LoRA 得先放进 ComfyUI 的 `models/checkpoints` 与 `models/loras`，
+`ckpt` 写文件名（在子目录里就写相对路径）。自定义 `workflow` 里可用的占位符：
+`prompt`、`negative`、`ckpt`、`width`、`height`、`size`、`steps`、`cfg`、`sampler`、`scheduler`、
+`seed`、`denoise`、`image`、`loras`、`prefix`、`filename`（写成 `{{prompt}}` 这样，认不出的原样留着）。
 
 ### 密钥
 
@@ -392,6 +443,8 @@ cortico-world-image/
 │  ├─ definition.js    # id/label/defaults/preflight/create
 │  ├─ config.js        # worlds.image 默认值、中英文案、配置组 schema
 │  ├─ world.js         # ImageWorld：工具、控制台面板、流式推送、生命周期
+│  ├─ chain.js         # 模型链：解析 worlds.image.models、排序、逐档回退、报错归纳
+│  ├─ comfyui.js       # 本地 ComfyUI 适配器（内置工作流 / 自定义 workflow / 改图 / 探活）
 │  ├─ chat-image-patch.js # QQ 发图路径的 2 处可选补丁、旧桌宠补丁还原、状态文件、重启请求（自愈核心）
 │  ├─ api.js           # OpenAI 兼容客户端的取图/落盘/错误归一化
 │  ├─ gallery.js       # 作品仓库：目录 + index.json
@@ -418,6 +471,9 @@ cortico-world-image/
 - `image_edit` 先走 `/images/edits`（multipart 上传）；端点没这条路由（404/405）时自动退回
   `/images/generations` 的 `image` 扩展字段（data URI，阿里云百炼那类）。两条路都不通时会回一条
   带 HTTP 码的错误，不是静默失败。
+- 模型链的 ComfyUI 那档**不会替你下模型**：checkpoint / LoRA 得先放进 ComfyUI 的
+  `models/checkpoints`、`models/loras`，`ckpt` 写文件名；本机没开 ComfyUI 时这档直接算不可用，
+  链会落到下一档。
 - 只有 Windows 上的「打开文件夹」会真的弹资源管理器；其他平台返回一句说明。
 - 画图本身要联网，只有自检样图是纯本地的。
 

@@ -64,6 +64,16 @@ const ZH = {
   clearKey: '清除密钥',
   clearKeyBody: '会把 .env 里那一行置空。之后画图会直接失败，直到重新填入。',
   saveKey: '保存密钥',
+  chainTitle: '模型链',
+  chainDesc: '按顺序试的一串后端：本地 ComfyUI 与云端 OpenAI 兼容接口可以放进同一个 JSON 数组，数组顺序就是优先级。前一档连不上、超时、额度用完、模型没装，就自动换下一档。留空则用下面那套单档配置。',
+  chainPlaceholder: '[{"name":"local","preset":"comfyui","baseUrl":"http://127.0.0.1:8188","ckpt":"sd_xl_base_1.0.safetensors"}]',
+  chainSave: '保存模型链',
+  chainSaved: '模型链已保存',
+  chainBad: '模型链存不上',
+  chainTest: '测试模型链',
+  chainTesting: '正在探活…',
+  chainTestNone: '还没测试。点「测试模型链」挨个试一下。',
+  chainEmpty: '没有配模型链（用的是下面那套单档配置）',
   endpoint: '接口地址',
   model: '模型',
   params: '默认参数',
@@ -161,6 +171,16 @@ const EN = {
   clearKey: 'Clear key',
   clearKeyBody: 'Empties that line in .env. Drawing will fail until a key is entered again.',
   saveKey: 'Save key',
+  chainTitle: 'Model chain',
+  chainDesc: 'Backends tried in order: a local ComfyUI and OpenAI-compatible cloud endpoints can share one JSON array, and the array order is the priority. If one is unreachable, times out, runs out of quota or lacks the model, the next entry is tried. Empty means the single-backend settings below.',
+  chainPlaceholder: '[{"name":"local","preset":"comfyui","baseUrl":"http://127.0.0.1:8188","ckpt":"sd_xl_base_1.0.safetensors"}]',
+  chainSave: 'Save chain',
+  chainSaved: 'Model chain saved',
+  chainBad: 'Could not save the model chain',
+  chainTest: 'Test chain',
+  chainTesting: 'Probing…',
+  chainTestNone: 'Not tested yet. Press "Test chain" to try each entry.',
+  chainEmpty: 'No model chain configured (the single-backend settings below are used)',
   endpoint: 'Endpoint',
   model: 'Model',
   params: 'Defaults',
@@ -222,6 +242,17 @@ const text = (language) => (language === 'en' ? EN : ZH);
 function message(err) {
   if (err && typeof err === 'object' && 'message' in err) return String(err.message);
   return String(err);
+}
+
+/** 模型链文本框：能解析就按两格缩进排好，解析不了就原样显示（让用户自己改）。 */
+function prettyChain(raw) {
+  const value = String(raw ?? '').trim();
+  if (!value) return '';
+  try {
+    return JSON.stringify(JSON.parse(value), null, 2);
+  } catch {
+    return value;
+  }
 }
 
 function injectStyle(ctx) {
@@ -531,6 +562,21 @@ function statusPanel(ctx) {
   keyCard.appendChild(keyRow);
   body.appendChild(keyCard);
 
+  const chainCard = ctx.ui.section(tx.chainTitle, tx.chainDesc);
+  const chainInput = ctx.ui.textarea({ rows: 6, cls: 'mono', placeholder: tx.chainPlaceholder });
+  chainInput.dataset.dirty = '0';
+  chainInput.addEventListener('input', () => { chainInput.dataset.dirty = '1'; });
+  chainCard.appendChild(ctx.ui.field(tx.chainTitle, chainInput));
+  const chainRow = ctx.ui.actions();
+  const chainList = ctx.ui.h('div', 'iw-sub', tx.chainTestNone);
+  chainRow.append(
+    ctx.ui.button(tx.chainSave, { size: 'sm', variant: 'primary', onClick: () => { void saveChain(); } }),
+    ctx.ui.button(tx.chainTest, { size: 'sm', onClick: () => { void testChain(); } }),
+  );
+  chainCard.appendChild(chainRow);
+  chainCard.appendChild(chainList);
+  body.appendChild(chainCard);
+
   const patchCard = ctx.ui.section(tx.patchTitle, tx.patchDesc);
   const patchHead = ctx.ui.h('div', 'iw-conn');
   patchCard.appendChild(patchHead);
@@ -635,6 +681,20 @@ function statusPanel(ctx) {
       { k: tx.runtime, v: `Node ${s?.node ?? '?'} · ${s?.platform ?? '?'}` },
     ]));
     keyInput.placeholder = s?.keySet ? tx.keyPlaceholderSet : tx.keyPlaceholder;
+    if (String(chainInput.dataset.dirty) !== '1') chainInput.value = prettyChain(s?.models);
+    chainList.replaceChildren();
+    const chain = Array.isArray(s?.chain) ? s.chain : [];
+    if (!chain.length) {
+      chainList.textContent = tx.chainEmpty;
+    } else {
+      for (const it of chain) {
+        const extra = it.model || it.baseUrl || '';
+        const line = ctx.ui.h('div', 'iw-sub');
+        line.appendChild(ctx.ui.pill(it.ok ? tx.setLabel : tx.unsetLabel, it.ok ? 'on' : 'off'));
+        line.appendChild(ctx.ui.h('span', null, ` ${it.name} · ${it.preset}${extra ? ` · ${extra}` : ''}${it.ok ? '' : ` — ${it.reason}`}`));
+        chainList.appendChild(line);
+      }
+    }
     renderPatch(s?.patch);
   };
 
@@ -649,6 +709,50 @@ function statusPanel(ctx) {
       ctx.ui.toast(message(err), 'bad');
     } finally {
       if (release) release.dispose();
+    }
+  };
+
+  const saveChain = async () => {
+    const value = chainInput.value.trim();
+    const release = ctx.ui.busy(tx.busier, tx.chainSave);
+    try {
+      await ctx.setConfig('world:image', { 'worlds.image.models': value });
+      chainInput.dataset.dirty = '0';
+      note.textContent = tx.chainSaved;
+      ctx.ui.toast(tx.chainSaved, 'ok');
+      await load(false);
+    } catch (err) {
+      note.textContent = `${tx.chainBad}：${message(err)}`;
+      ctx.ui.toast(`${tx.chainBad}：${message(err)}`, 'bad');
+    } finally {
+      release.dispose();
+    }
+  };
+
+  const testChain = async () => {
+    const release = ctx.ui.busy(tx.chainTesting, tx.chainTest);
+    try {
+      const res = await ctx.invoke('probe', []);
+      chainList.replaceChildren();
+      if (res?.error) {
+        chainList.appendChild(ctx.ui.h('div', 'iw-sub', res.error));
+        return;
+      }
+      const items = Array.isArray(res?.items) ? res.items : [];
+      if (!items.length) {
+        chainList.textContent = tx.chainEmpty;
+        return;
+      }
+      for (const it of items) {
+        const line = ctx.ui.h('div', 'iw-sub');
+        line.appendChild(ctx.ui.pill(it.ok ? tx.setLabel : tx.unsetLabel, it.ok ? 'on' : 'off'));
+        line.appendChild(ctx.ui.h('span', null, ` ${it.name} · ${it.preset} — ${it.detail}`));
+        chainList.appendChild(line);
+      }
+    } catch (err) {
+      ctx.ui.toast(message(err), 'bad');
+    } finally {
+      release.dispose();
     }
   };
 

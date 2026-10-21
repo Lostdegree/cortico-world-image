@@ -612,7 +612,7 @@ try {
   section('契约与自描述（框架 0.2）');
   const pkg = JSON.parse(readFileSync(join(pkgDir, 'package.json'), 'utf8'));
   const manifest = pkg.cortico ?? {};
-  check(/^0\.3\.\d+$/.test(pkg.version), 'version 在 0.3.x 线上', String(pkg.version));
+  check(/^0\.4\.\d+$/.test(pkg.version), 'version 在 0.4.x 线上', String(pkg.version));
   check(manifest.api === 6, 'cortico.api 是 6', String(manifest.api));
   check(manifest.webUiClient === 'dist/webui.js', 'webUiClient 指向 dist/webui.js', String(manifest.webUiClient));
   check(manifest.describe === 'describe.json', 'describe 指向 describe.json', String(manifest.describe));
@@ -909,6 +909,155 @@ try {
   const badge = (world.webUi('zh').badges ?? []).find((b) => b.label === 'QQ 发图路径');
   check(!!badge, '控制台徽章里有「QQ 发图路径」');
   check(badge?.value === '未检查', '检查模式下徽章显示「未检查」', String(badge?.value));
+
+  section('模型链（纯逻辑）');
+  const chainMod = await import(pathToFileURL(join(pkgDir, 'src', 'chain.js')).href);
+  const onlyLegacy = chainMod.parseChainEntries('', { baseUrl: 'https://api.example/v1', model: 'gpt-image-1', timeoutMs: 4000 });
+  check(onlyLegacy.error === '' && onlyLegacy.entries.length === 1, '没配链时退成旧单档', JSON.stringify(onlyLegacy.entries.map((e) => e.name)));
+  check(onlyLegacy.entries[0].preset === 'openai' && onlyLegacy.entries[0].model === 'gpt-image-1', '旧单档是 openai、模型名照旧');
+  check(onlyLegacy.entries[0].timeoutMs === 10000, '旧单档的超时被抬到下限 10000', String(onlyLegacy.entries[0].timeoutMs));
+  check(chainMod.parseChainEntries('[oops').error.includes('不是合法 JSON'), '坏 JSON 整份报错');
+  check(chainMod.parseChainEntries('{"a":1}').error.includes('JSON 数组'), '不是数组也整份报错');
+  const noUsable = chainMod.parseChainEntries('[{"name":"x","preset":"openai"}]');
+  check(noUsable.error.includes('没有一档可用') && noUsable.warnings.some((w) => w.includes('没有 baseUrl')), '每档都要有地址，缺的跳过并提醒');
+
+  const chain = chainMod.parseChainEntries(
+    JSON.stringify([
+      { name: 'local', preset: 'comfyui', baseUrl: 'http://127.0.0.1:8188', ckpt: 'sd_xl_base_1.0.safetensors', steps: 999, cfg: 99 },
+      { name: 'cloud', preset: 'openai', baseUrl: 'https://api.example/v1', model: 'gpt-image-1' },
+      { name: 'broken', preset: 'openai' },
+      { name: 'local', preset: 'comfyui', baseUrl: 'http://127.0.0.1:8189', ckpt: 'other.safetensors' },
+    ]),
+  );
+  check(chain.error === '' && chain.entries.length === 3, '三档有效、没地址的跳过', String(chain.entries.length));
+  check(chain.entries[0].preset === 'comfyui' && chain.entries[0].ckpt === 'sd_xl_base_1.0.safetensors' && chain.entries[0].model === '', 'comfyui 档带 ckpt、不用模型名');
+  check(chain.entries[0].steps === 150 && chain.entries[0].cfg === 30, 'steps / cfg 夹到上限', `${chain.entries[0].steps}/${chain.entries[0].cfg}`);
+  check(chain.entries[2].name === 'local#4', '重名的档自动改名', chain.entries[2].name);
+  check(chain.entries[1].apiKeySecret === 'IMAGE_API_KEY', 'openai 档的密钥变量名默认 IMAGE_API_KEY', chain.entries[1].apiKeySecret);
+
+  const local = chain.entries[0];
+  const cloud = chain.entries[1];
+  check(chainMod.entryState(local).ok, 'comfyui 档配齐了就能用');
+  check(!chainMod.entryState({ ...local, ckpt: '' }).ok, '缺 ckpt 的 comfyui 档不能用');
+  check(!chainMod.entryState({ ...local, enabled: false }).ok, '停用的档不能用');
+  check(!chainMod.entryState({ ...local, baseUrl: '' }).ok, '没地址的档不能用');
+  check(!chainMod.entryState(cloud).ok && chainMod.entryState(cloud).reason.includes('密钥'), 'openai 档没密钥不能用');
+  check(chainMod.entryState(cloud, { apiKey: 'sk-x' }).ok, '给了密钥就能用');
+
+  const order = [];
+  const chainHit = await chainMod.runChain([{ ...local, name: 'a' }, { ...local, name: 'b' }], async (entry) => {
+    order.push(entry.name);
+    if (entry.name === 'a') throw Object.assign(new Error('连不上'), { status: 502 });
+    return { value: 'ok' };
+  });
+  check(order.join(',') === 'a,b' && chainHit.entry.name === 'b', '前档失败自动换下一档', order.join(','));
+  check(chainHit.attempts.length === 1 && chainHit.attempts[0].status === 502, '失败的一档记下状态码', JSON.stringify(chainHit.attempts));
+
+  let fatalTried = 0;
+  let fatalErr = null;
+  try {
+    await chainMod.runChain([{ ...local, name: 'a' }, { ...local, name: 'b' }], async () => {
+      fatalTried += 1;
+      throw Object.assign(new Error('blocked by content policy'), { status: 400 });
+    });
+  } catch (err) {
+    fatalErr = err;
+  }
+  check(fatalErr && fatalTried === 1, '内容审核类错误不换下一档（换谁都一样）', String(fatalTried));
+
+  let onlyTried = [];
+  const onlyHit = await chainMod.runChain(
+    [{ ...local, name: 'a' }, { ...local, name: 'b' }],
+    async (entry) => {
+      onlyTried.push(entry.name);
+      return { value: entry.name };
+    },
+    { only: 'b' },
+  );
+  check(onlyTried.join(',') === 'b' && onlyHit.entry.name === 'b', '点名一档时只试那一档', onlyTried.join(','));
+
+  let allErr = null;
+  try {
+    await chainMod.runChain([{ ...local, name: 'a' }, { ...local, name: 'b' }], async () => {
+      throw new Error('连不上');
+    });
+  } catch (err) {
+    allErr = err;
+  }
+  check(allErr && String(allErr.message).includes('都失败了') && String(allErr.message).includes('- a'), '全失败时逐档列原因', String(allErr?.message).split('\n')[0]);
+
+  const snap = chainMod.chainSnapshot([{ ...local, name: 'a' }, { ...cloud, name: 'b' }]);
+  check(snap.length === 2 && snap[0].model === 'sd_xl_base_1.0.safetensors' && snap[1].ok === false, '快照里 comfyui 展示 ckpt、openai 缺密钥标不能用', JSON.stringify(snap));
+
+  section('ComfyUI 适配器（纯逻辑）');
+  const comfy = await import(pathToFileURL(join(pkgDir, 'src', 'comfyui.js')).href);
+  const wh = comfy.sizeToWH('1024x768');
+  check(wh.width === 1024 && wh.height === 768, '1024x768 原样');
+  const wh2 = comfy.sizeToWH('1001x777');
+  check(wh2.width % 8 === 0 && wh2.height % 8 === 0 && wh2.width >= 64, '尺寸对齐到 8 的倍数', `${wh2.width}x${wh2.height}`);
+  const wh3 = comfy.sizeToWH('nonsense');
+  check(wh3.width === 1024 && wh3.height === 1024, '写坏了退回 1024');
+
+  const loras = comfy.parseLoras(['add_detail:0.6', { name: 'x.safetensors', strength: 0.4 }]);
+  check(loras.length === 2 && loras[0].strength === 0.6 && loras[1].strength === 0.4, 'LoRA 两种写法都认', JSON.stringify(loras));
+
+  const wf = comfy.txt2ImgWorkflow({ ckpt: 'ck.safetensors', prompt: '猫', size: '512x512', loras: ['l.safetensors:0.5'], seed: 7 });
+  check(wf['4'].class_type === 'CheckpointLoaderSimple' && wf['4'].inputs.ckpt_name === 'ck.safetensors', '文生图工作流带 ckpt');
+  check(wf['20']?.class_type === 'LoraLoader' && wf['3'].inputs.model[0] === '20', 'LoRA 串进 KSampler 的 model');
+  check(wf['6'].inputs.text === '猫' && wf['3'].inputs.seed === 7 && wf['5'].inputs.width === 512, '提示词 / 种子 / 尺寸进了节点');
+  const wf2 = comfy.img2ImgWorkflow({ ckpt: 'ck.safetensors', prompt: '猫', image: 'uploaded.png', denoise: 0.5 });
+  check(wf2['10'].class_type === 'LoadImage' && wf2['10'].inputs.image === 'uploaded.png', '改图工作流读上传的图');
+  check(wf2['3'].inputs.denoise === 0.5, 'denoise 透传到 KSampler');
+  check(comfy.WORKFLOW_VARS.includes('prompt') && comfy.WORKFLOW_VARS.includes('seed'), '自定义模板的占位符清单里有 prompt / seed');
+  const applied = comfy.applyVars({ a: '{{prompt}}', b: ['{{seed}}', 3], c: 'x {{ nope }} y' }, { prompt: '猫', seed: 42 });
+  check(applied.a === '猫' && applied.b[0] === 42 && applied.c === 'x {{ nope }} y', '模板变量替换：认识的换成值、不认识的留着', JSON.stringify(applied));
+
+  section('ComfyUI 整条链路（stub fetch）');
+  const comfyCalls = [];
+  const comfyPng = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 9, 9, 9, 9]);
+  const stubComfy = (overrides = {}) => {
+    globalThis.fetch = async (url, init = {}) => {
+      const u = new URL(String(url));
+      comfyCalls.push({ path: u.pathname, method: init.method ?? 'GET' });
+      if (u.pathname.endsWith('/prompt') && init.method === 'POST') {
+        return overrides.prompt ? overrides.prompt(init) : jsonResponse({ prompt_id: 'p-1', number: 1 });
+      }
+      if (u.pathname.startsWith('/history/')) return jsonResponse({
+        'p-1': { status: { status_str: 'success', completed: true }, outputs: { 9: { images: [{ filename: 'out.png', subfolder: '', type: 'output' }] } } },
+      });
+      if (u.pathname.endsWith('/view')) return new Response(comfyPng, { status: 200, headers: { 'content-type': 'image/png' } });
+      if (u.pathname.endsWith('/upload/image')) return jsonResponse({ name: 'uploaded.png', subfolder: '' });
+      return new Response('nope', { status: 404 });
+    };
+  };
+  try {
+    stubComfy();
+    const drawn = await comfy.comfyDraw({ baseUrl: 'http://comfy.test', ckpt: 'ck.safetensors', prompt: '猫', size: '512x512', seed: 1, timeoutMs: 5000 });
+    check(drawn.bytes.equals(comfyPng) && drawn.mime === 'image/png' && drawn.promptId === 'p-1', '提交 → 等 → 取图整条走通', `${drawn.promptId}`);
+    check(comfyCalls.some((c) => c.path === '/prompt' && c.method === 'POST'), '提交走 POST /prompt');
+    check(comfyCalls.some((c) => c.path.startsWith('/history/')), '等结果查 /history/<id>');
+    check(comfyCalls.some((c) => c.path === '/view'), '取图走 /view');
+
+    comfyCalls.length = 0;
+    const edited = await comfy.comfyEdit({ baseUrl: 'http://comfy.test', ckpt: 'ck.safetensors', prompt: '改成水彩', image: comfyPng, mime: 'image/png', timeoutMs: 8000 });
+    check(edited.bytes.equals(comfyPng), '改图：上传 → 提交 → 取图');
+    check(comfyCalls.some((c) => c.path === '/upload/image'), '改图先传到 input/');
+
+    stubComfy({ prompt: () => jsonResponse({ error: { type: 'invalid_prompt' }, node_errors: { 4: { errors: [{ message: 'ckpt_name not in list' }] } } }, 400) });
+    let comfyErr = null;
+    try {
+      await comfy.comfyDraw({ baseUrl: 'http://comfy.test', ckpt: 'nope.safetensors', prompt: '猫', timeoutMs: 5000 });
+    } catch (err) {
+      comfyErr = err;
+    }
+    check(comfyErr?.status === 400 && String(comfyErr.message).includes('ckpt_name'), 'ComfyUI 拒绝时带上原话与状态码', String(comfyErr?.message));
+
+    comfyCalls.length = 0;
+    const probed = await comfy.probe('http://comfy.test', { timeoutMs: 3000 });
+    check(probed.ok === false && String(probed.error).includes('404'), '探活失败要说清原因', JSON.stringify(probed));
+  } finally {
+    globalThis.fetch = realFetch;
+  }
 
   section('未知方法与面板');
   let threw = false;
