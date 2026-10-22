@@ -491,7 +491,9 @@ cortico-world-image/
   不会变成方图，但也不会保持原始分辨率。
 - 模型链的 ComfyUI 那档**不会替你下模型**：checkpoint / LoRA 得先放进 ComfyUI 的
   `models/checkpoints`、`models/loras`，`ckpt` 写文件名；本机没开 ComfyUI 时这档直接算不可用，
-  链会落到下一档。
+  链会落到下一档。**裸 UNet 要放 `models/diffusion_models`**（老版本是 `models/unet`），放错到
+  `checkpoints` 里会被当成 checkpoint、`UNETLoader` 那边永远看不到——这种时候插件会把 ComfyUI 的
+  校验错误翻成人话：缺哪个字段、给了什么值、它现在认哪些名字、文件该放哪个目录。
 - 只有 Windows 上的「打开文件夹」会真的弹资源管理器；其他平台返回一句说明。
 - 画图本身要联网，只有自检样图是纯本地的。
 

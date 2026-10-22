@@ -1178,6 +1178,50 @@ try {
     }
     check(comfyErr?.status === 400 && String(comfyErr.message).includes('ckpt_name'), 'ComfyUI 拒绝时带上原话与状态码', String(comfyErr?.message));
 
+    // 「文件放错目录 / 名字不对」这类最常踩的坑：要把可用清单和该放的目录说出来。
+    const notInList = {
+      error: { type: 'invalid_prompt', message: 'Prompt outputs failed validation' },
+      node_errors: {
+        1: {
+          errors: [
+            {
+              type: 'value_not_in_list',
+              message: 'Value not in list',
+              details: "unet_name: 'anima-turbo-v1.1.safetensors' not in ['anima-base-v1.0.safetensors']",
+              extra_info: {
+                input_name: 'unet_name',
+                received_value: 'anima-turbo-v1.1.safetensors',
+                input_config: [['anima-base-v1.0.safetensors', 'anima-turbo-v1.1.safetensors']],
+              },
+            },
+          ],
+          class_type: 'UNETLoader',
+          dependent_outputs: [13],
+        },
+      },
+    };
+    const explained = comfy.explainNodeErrors(notInList) ?? '';
+    check(
+      explained.includes('unet_name') && explained.includes('anima-turbo-v1.1.safetensors') && explained.includes('diffusion_models'),
+      '「文件不在列表里」要说清是哪个字段、它认哪些、该放哪个目录',
+      explained,
+    );
+    check(explained.includes('anima-base-v1.0.safetensors'), '报错里列出 ComfyUI 现有可用的名字', explained);
+    check(comfy.explainNodeErrors({ prompt_id: 'x' }) === null, '没有节点错误时不瞎编');
+
+    stubComfy({ prompt: () => jsonResponse(notInList, 400) });
+    let notListedErr = null;
+    try {
+      await comfy.comfyDraw({ baseUrl: 'http://comfy.test', unet: 'anima-turbo-v1.1.safetensors', prompt: '猫', timeoutMs: 5000 });
+    } catch (err) {
+      notListedErr = err;
+    }
+    check(
+      notListedErr?.status === 400 && String(notListedErr.message).includes('diffusion_models'),
+      '这条提示会跟着报错一起交给工具回执',
+      String(notListedErr?.message),
+    );
+
     comfyCalls.length = 0;
     const probed = await comfy.probe('http://comfy.test', { timeoutMs: 3000 });
     check(probed.ok === false && String(probed.error).includes('404'), '探活失败要说清原因', JSON.stringify(probed));

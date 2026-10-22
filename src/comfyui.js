@@ -16,6 +16,7 @@ export class ComfyError extends ImageApiError {
     super(message, opts);
     this.name = 'ComfyError';
     this.promptId = String(opts.promptId ?? '');
+    this.json = opts.json ?? null;
   }
 }
 
@@ -74,6 +75,7 @@ async function requestJson(target, { method = 'GET', body, timeoutMs = 30000, wh
     throw new ComfyError(`${what}返回 ${res.status}：${snippet(raw, 300)}${extra}`, {
       status: res.status,
       body: snippet(text, 800),
+      json,
     });
   }
   if (!json && text.trim()) throw new ComfyError(`${what}没有返回 JSON：${snippet(text, 300)}`, { status: res.status });
@@ -412,19 +414,65 @@ export const WORKFLOW_VARS = [
 // ---------------------------------------------------------------------------
 
 /** 提交工作流，拿 `prompt_id`；节点校验不过直接抛（这类错误换后端也救不了）。 */
-export async function submitPrompt(baseUrl, workflow, { timeoutMs = 30000 } = {}) {
-  const json = await requestJson(at(baseUrl, 'prompt'), {
-    method: 'POST',
-    body: JSON.stringify({ prompt: workflow, client_id: randomUUID() }),
-    timeoutMs,
-    what: '提交工作流的 ComfyUI',
-  });
+/** 各类 `*_name` 该放哪个目录（ComfyUI 改过几次目录名，老版本用括号里的）。 */
+const MODEL_DIR_HINT = {
+  unet_name: 'ComfyUI/models/diffusion_models（老版本是 models/unet）',
+  ckpt_name: 'ComfyUI/models/checkpoints',
+  clip_name: 'ComfyUI/models/text_encoders（老版本是 models/clip）',
+  vae_name: 'ComfyUI/models/vae',
+  lora_name: 'ComfyUI/models/loras',
+};
+
+/**
+ * 把 ComfyUI 的 `node_errors` 翻成人话：点名哪个字段、给了什么值、它认哪些、文件该放哪。
+ * 认不出结构时退回原话。没有节点错误返回 `null`。
+ */
+export function explainNodeErrors(json) {
   const nodeErrors = json?.node_errors;
-  if (nodeErrors && typeof nodeErrors === 'object' && Object.keys(nodeErrors).length) {
-    const first = nodeErrors[Object.keys(nodeErrors)[0]];
-    const detail = first?.errors?.[0]?.message ?? first?.errors?.[0]?.details ?? first?.class_type ?? JSON.stringify(first);
-    throw new ComfyError(`ComfyUI 不收这份工作流：${snippet(detail, 240)}`, { status: 400 });
+  if (!nodeErrors || typeof nodeErrors !== 'object' || !Object.keys(nodeErrors).length) return null;
+  const nodeId = Object.keys(nodeErrors)[0];
+  const first = nodeErrors[nodeId];
+  const err = first?.errors?.[0];
+  const info = err?.extra_info ?? {};
+  const field = String(info.input_name ?? '');
+  const allowed = Array.isArray(info.input_config?.[0])
+    ? info.input_config[0].filter((v) => typeof v === 'string')
+    : [];
+  if (field && allowed.length) {
+    const head = allowed.slice(0, 12).join('、');
+    const tail = allowed.length > 12 ? `${head} …（共 ${allowed.length} 个）` : head;
+    const where = MODEL_DIR_HINT[field];
+    const got = info.received_value === undefined ? '' : `「${info.received_value}」`;
+    return [
+      `ComfyUI 里没有这个 ${field}${got}。`,
+      `它现在认：${tail || '（空）'}。`,
+      where ? `文件要放在 ${where} 下面；放对了却在列表里看不到，就重启一下 ComfyUI。` : '',
+      field === 'ckpt_name' ? '如果这是裸 UNet（没有 CLIP / VAE 那种），得放进 diffusion_models 当 UNet 用。' : '',
+    ]
+      .filter(Boolean)
+      .join('');
   }
+  const detail = err?.message ?? err?.details ?? first?.class_type ?? JSON.stringify(first);
+  return `ComfyUI 不收这份工作流（节点 ${nodeId}${first?.class_type ? ` / ${first.class_type}` : ''}）：${snippet(detail, 240)}`;
+}
+
+export async function submitPrompt(baseUrl, workflow, { timeoutMs = 30000 } = {}) {
+  let json;
+  try {
+    json = await requestJson(at(baseUrl, 'prompt'), {
+      method: 'POST',
+      body: JSON.stringify({ prompt: workflow, client_id: randomUUID() }),
+      timeoutMs,
+      what: '提交工作流的 ComfyUI',
+    });
+  } catch (err) {
+    // 校验不过时 ComfyUI 会回 400，但正文里有 node_errors——翻成人话再抛，别只剩一句「返回 400」。
+    const explained = explainNodeErrors(err?.json);
+    if (explained) throw new ComfyError(explained, { status: err.status || 400, body: err.body, json: err.json });
+    throw err;
+  }
+  const explained = explainNodeErrors(json);
+  if (explained) throw new ComfyError(explained, { status: 400, json });
   if (!json?.prompt_id) {
     throw new ComfyError(`ComfyUI 没给 prompt_id：${snippet(JSON.stringify(json ?? {}), 240)}`, { status: 0 });
   }
