@@ -310,7 +310,7 @@ pnpm add "D:\path\to\cortico-world-image" --ignore-workspace
 | `unet` / `textEncoder` / `vaeName` | 裸 UNet 三件套：`ComfyUI/models/diffusion_models`、`text_encoders`、`vae` 里的文件名。**填了 `unet` 就顶掉 `ckpt`**，只出裸 UNet 那份工作流 |
 | `textEncoderType` | `unet` 的文本编码器类型，默认 `stable_diffusion`；Qwen 系编码器填 `qwen_image`（还认 `sd3` / `flux` / `cosmos` / `lumina2`） |
 | `loras` | ComfyUI 的 LoRA：`["add_detail.safetensors:0.6", {"name":"x.safetensors","strength":0.4,"clipStrength":0.25}]`（名字带扩展名，文件得先在 ComfyUI 的 `models/loras` 里） |
-| `steps` / `cfg` / `sampler` / `scheduler` / `denoise` / `negative` | ComfyUI 采样参数（默认 25 / 7 / euler / normal / 0.6） |
+| `steps` / `cfg` / `sampler` / `scheduler` / `denoise` / `negative` | ComfyUI 采样参数（默认 25 / 7 / euler / normal / 0.6）。`denoise` 在改图时就是改动幅度：0.6 起改得明显，只微调用 0.2~0.35 |
 | `workflow` | 自定义 ComfyUI API 工作流（对象）。给了就整份替换内置模板，占位符见下 |
 | `edit` | `false` = 这一档只用来画、不接改图（改图会跳到下一档） |
 | `enabled` | `false` = 跳过这一档 |
@@ -486,6 +486,9 @@ cortico-world-image/
 - `image_edit` 先走 `/images/edits`（multipart 上传）；端点没这条路由（404/405）时自动退回
   `/images/generations` 的 `image` 扩展字段（data URI，阿里云百炼那类）。两条路都不通时会回一条
   带 HTTP 码的错误，不是静默失败。
+- 改图的尺寸：ComfyUI 那档**不传 `size` 时会照参考图的比例**出图（最长边压到 1536、对齐 8），
+  传了 `size` 就按给的；云端那档走接口自己的默认（一般不传尺寸）。所以改一张 1600×1200 的图
+  不会变成方图，但也不会保持原始分辨率。
 - 模型链的 ComfyUI 那档**不会替你下模型**：checkpoint / LoRA 得先放进 ComfyUI 的
   `models/checkpoints`、`models/loras`，`ckpt` 写文件名；本机没开 ComfyUI 时这档直接算不可用，
   链会落到下一档。

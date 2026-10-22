@@ -93,6 +93,83 @@ export function sizeToWH(size, fallback = 1024) {
 }
 
 /**
+ * 从图片字节里读宽高（PNG / JPEG / WebP / GIF），读不出来返回 `null`。
+ * 图生图要靠它按参考图的比例出图，不然一律 1024×1024 会把图拉变形。
+ */
+export function imageSize(bytes) {
+  if (!Buffer.isBuffer(bytes) || bytes.length < 24) return null;
+  // PNG：开头就是 IHDR
+  if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) {
+    return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) };
+  }
+  // GIF
+  if (bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46) {
+    return { width: bytes.readUInt16LE(6), height: bytes.readUInt16LE(8) };
+  }
+  // WebP：三种扩展块各有一套字节布局
+  if (bytes.toString('latin1', 0, 4) === 'RIFF' && bytes.toString('latin1', 8, 12) === 'WEBP') {
+    const kind = bytes.toString('latin1', 12, 16);
+    if (kind === 'VP8X' && bytes.length >= 30) {
+      return {
+        width: 1 + (bytes[24] | (bytes[25] << 8) | (bytes[26] << 16)),
+        height: 1 + (bytes[27] | (bytes[28] << 8) | (bytes[29] << 16)),
+      };
+    }
+    if (kind === 'VP8L' && bytes.length >= 25) {
+      const b1 = bytes[22];
+      const b2 = bytes[23];
+      const b3 = bytes[24];
+      return {
+        width: 1 + (((b1 & 0x3f) << 8) | bytes[21]),
+        height: 1 + (((b3 & 0x0f) << 10) | (b2 << 2) | ((b1 & 0xc0) >> 6)),
+      };
+    }
+    if (kind === 'VP8 ' && bytes.length >= 30) {
+      return { width: bytes.readUInt16LE(26) & 0x3fff, height: bytes.readUInt16LE(28) & 0x3fff };
+    }
+  }
+  // JPEG：逐段走到 SOFn
+  if (bytes[0] === 0xff && bytes[1] === 0xd8) {
+    let i = 2;
+    while (i + 9 < bytes.length) {
+      if (bytes[i] !== 0xff) {
+        i += 1;
+        continue;
+      }
+      const marker = bytes[i + 1];
+      if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) {
+        i += 2;
+        continue;
+      }
+      const len = bytes.readUInt16BE(i + 2);
+      if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
+        return { height: bytes.readUInt16BE(i + 5), width: bytes.readUInt16BE(i + 7) };
+      }
+      i += 2 + len;
+    }
+  }
+  return null;
+}
+
+/** 按比例缩到 `maxSide` 以内，并对齐到 8 的倍数。 */
+export function fitSize({ width, height }, maxSide = 1536) {
+  const w = Math.max(1, Number(width) || 0);
+  const h = Math.max(1, Number(height) || 0);
+  const scale = Math.min(1, maxSide / Math.max(w, h));
+  const dim = (v) => Math.max(64, Math.min(4096, Math.round((v * scale) / 8) * 8));
+  return { width: dim(w), height: dim(h) };
+}
+
+/** 图生图尺寸：用户给了就用；没给就按参考图比例缩到 1536 以内。 */
+export function imageToSize(bytes, size) {
+  if (String(size ?? '').trim()) return String(size).trim();
+  const dim = imageSize(bytes);
+  if (!dim) return size;
+  const fit = fitSize(dim);
+  return `${fit.width}x${fit.height}`;
+}
+
+/**
  * LoRA 写法：`"add_detail"`、`"add_detail:0.6"`，或 `{ name, strength, clipStrength }`。
  * 文件名要带扩展名（ComfyUI 的 `lora_name` 就是 `models/loras/` 里的相对文件名）。
  */
@@ -539,17 +616,20 @@ export async function comfyDraw(opts = {}) {
  */
 export async function comfyEdit(opts = {}) {
   const timeoutMs = Number(opts.timeoutMs) > 0 ? Number(opts.timeoutMs) : 300000;
-  const { width, height } = sizeToWH(opts.size);
+  // 没指定尺寸就跟着参考图的比例走（最长边 1536），别一律拉成方图。
+  const size = imageToSize(opts.image, opts.size);
+  const { width, height } = sizeToWH(size);
   const uploaded = await uploadImage(
     opts.baseUrl,
     { bytes: opts.image, mime: opts.mime, name: opts.name ?? 'coopanion.png' },
     { timeoutMs: Math.min(timeoutMs, 60000) },
   );
+  const shaped = { ...opts, size };
   const workflow = opts.workflow
-    ? applyVars(opts.workflow, workflowVars(opts, { width, height, image: uploaded, filename: uploaded }))
+    ? applyVars(opts.workflow, workflowVars(shaped, { width, height, image: uploaded, filename: uploaded }))
     : opts.unet
-      ? unetImg2ImgWorkflow({ ...opts, image: uploaded })
-      : img2ImgWorkflow({ ...opts, image: uploaded });
+      ? unetImg2ImgWorkflow({ ...shaped, image: uploaded })
+      : img2ImgWorkflow({ ...shaped, image: uploaded });
   const promptId = await submitPrompt(opts.baseUrl, workflow, { timeoutMs: Math.min(timeoutMs, 30000) });
   const picked = await waitForImages(opts.baseUrl, promptId, { timeoutMs, onTick: opts.onTick });
   const { bytes, mime } = await fetchImage(opts.baseUrl, picked, { timeoutMs: Math.min(timeoutMs, 60000) });

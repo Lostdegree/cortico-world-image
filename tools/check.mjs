@@ -1028,6 +1028,36 @@ try {
   const wh3 = comfy.sizeToWH('nonsense');
   check(wh3.width === 1024 && wh3.height === 1024, '写坏了退回 1024');
 
+  // 图生图靠图片字节认比例
+  const pngBytes = Buffer.alloc(33);
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(pngBytes, 0);
+  pngBytes.writeUInt32BE(1600, 16);
+  pngBytes.writeUInt32BE(1200, 20);
+  const pngDim = comfy.imageSize(pngBytes);
+  check(pngDim?.width === 1600 && pngDim?.height === 1200, 'PNG 能从字节里读出宽高', JSON.stringify(pngDim));
+
+  const jpegBytes = Buffer.from([0xff, 0xd8, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x04, 0x38, 0x07, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+  const jpegDim = comfy.imageSize(jpegBytes);
+  check(jpegDim?.width === 1920 && jpegDim?.height === 1080, 'JPEG 能走到 SOF0 读出宽高', JSON.stringify(jpegDim));
+
+  const webpBytes = Buffer.alloc(30);
+  webpBytes.write('RIFF', 0, 'latin1');
+  webpBytes.write('WEBP', 8, 'latin1');
+  webpBytes.write('VP8X', 12, 'latin1');
+  webpBytes[24] = 0x7f; // 128-1
+  webpBytes[27] = 0x5f; // 96-1
+  const webpDim = comfy.imageSize(webpBytes);
+  check(webpDim?.width === 128 && webpDim?.height === 96, 'WebP(VP8X) 能读出宽高', JSON.stringify(webpDim));
+  check(comfy.imageSize(Buffer.from('not an image at all, really not')) === null, '认不出来就返回 null');
+
+  const fitted = comfy.fitSize({ width: 1600, height: 1200 });
+  check(fitted.width === 1536 && fitted.height === 1152, '比例不变、最长边压到 1536', JSON.stringify(fitted));
+  const smallFit = comfy.fitSize({ width: 800, height: 600 });
+  check(smallFit.width === 800 && smallFit.height === 600, '小图不放大', JSON.stringify(smallFit));
+  check(comfy.imageToSize(pngBytes, '512x512') === '512x512', '图生图给了尺寸就用给的');
+  check(comfy.imageToSize(pngBytes, '') === '1536x1152', '图生图没给尺寸就跟参考图比例');
+  check(comfy.imageToSize(Buffer.from('nope, definitely not an image'), '') === '', '认不出图就不猜');
+
   const loras = comfy.parseLoras(['add_detail:0.6', { name: 'x.safetensors', strength: 0.4 }]);
   check(loras.length === 2 && loras[0].strength === 0.6 && loras[1].strength === 0.4, 'LoRA 两种写法都认', JSON.stringify(loras));
 
@@ -1062,11 +1092,15 @@ try {
 
   section('ComfyUI 整条链路（stub fetch）');
   const comfyCalls = [];
-  const comfyPng = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 9, 9, 9, 9]);
+  // 一张 1600×1200 的「PNG」：图生图该照着它的比例出图，不该拉成方图。
+  const comfyPng = Buffer.alloc(33);
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(comfyPng, 0);
+  comfyPng.writeUInt32BE(1600, 16);
+  comfyPng.writeUInt32BE(1200, 20);
   const stubComfy = (overrides = {}) => {
     globalThis.fetch = async (url, init = {}) => {
       const u = new URL(String(url));
-      comfyCalls.push({ path: u.pathname, method: init.method ?? 'GET' });
+      comfyCalls.push({ path: u.pathname, method: init.method ?? 'GET', body: init.body ?? null });
       if (u.pathname.endsWith('/prompt') && init.method === 'POST') {
         return overrides.prompt ? overrides.prompt(init) : jsonResponse({ prompt_id: 'p-1', number: 1 });
       }
@@ -1090,6 +1124,50 @@ try {
     const edited = await comfy.comfyEdit({ baseUrl: 'http://comfy.test', ckpt: 'ck.safetensors', prompt: '改成水彩', image: comfyPng, mime: 'image/png', timeoutMs: 8000 });
     check(edited.bytes.equals(comfyPng), '改图：上传 → 提交 → 取图');
     check(comfyCalls.some((c) => c.path === '/upload/image'), '改图先传到 input/');
+    const editWf = JSON.parse(comfyCalls.filter((c) => c.path === '/prompt').at(-1).body).prompt;
+    check(
+      editWf['11']?.inputs?.width === 1536 && editWf['11']?.inputs?.height === 1152,
+      '图生图没给尺寸时按参考图比例缩到 1536 以内，不拉成方图',
+      JSON.stringify(editWf['11']?.inputs),
+    );
+    check(
+      editWf['10']?.class_type === 'LoadImage' && editWf['12']?.class_type === 'VAEEncode',
+      '图生图是 LoadImage → VAEEncode → KSampler',
+      Object.values(editWf).map((n) => n.class_type).join(','),
+    );
+
+    comfyCalls.length = 0;
+    const editedSized = await comfy.comfyEdit({ baseUrl: 'http://comfy.test', ckpt: 'ck.safetensors', prompt: '改成水彩', image: comfyPng, mime: 'image/png', size: '768x768', timeoutMs: 8000 });
+    const sizedWf = JSON.parse(comfyCalls.filter((c) => c.path === '/prompt').at(-1).body).prompt;
+    check(
+      editedSized.bytes.length > 0 && sizedWf['11'].inputs.width === 768 && sizedWf['11'].inputs.height === 768,
+      '图生图给了尺寸就听给的',
+      JSON.stringify(sizedWf['11'].inputs),
+    );
+
+    comfyCalls.length = 0;
+    await comfy.comfyEdit({
+      baseUrl: 'http://comfy.test',
+      unet: 'anima-base-v1.0.safetensors',
+      textEncoder: 'qwen_3_06b_base.safetensors',
+      textEncoderType: 'qwen_image',
+      vaeName: 'qwen_image_vae.safetensors',
+      prompt: '改成水彩',
+      image: comfyPng,
+      mime: 'image/png',
+      denoise: 0.45,
+      timeoutMs: 8000,
+    });
+    const unetEditWf = JSON.parse(comfyCalls.filter((c) => c.path === '/prompt').at(-1).body).prompt;
+    check(
+      unetEditWf['1']?.class_type === 'UNETLoader'
+        && unetEditWf['10']?.class_type === 'LoadImage'
+        && unetEditWf['12']?.class_type === 'VAEEncode'
+        && unetEditWf['8']?.class_type === 'KSampler'
+        && unetEditWf['8']?.inputs?.denoise === 0.45,
+      '裸 UNet 也能图生图（UNETLoader + LoadImage + denoise）',
+      Object.values(unetEditWf).map((n) => n.class_type).join(','),
+    );
 
     stubComfy({ prompt: () => jsonResponse({ error: { type: 'invalid_prompt' }, node_errors: { 4: { errors: [{ message: 'ckpt_name not in list' }] } } }, 400) });
     let comfyErr = null;
