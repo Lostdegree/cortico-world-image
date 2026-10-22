@@ -494,6 +494,9 @@ cortico-world-image/
   链会落到下一档。**裸 UNet 要放 `models/diffusion_models`**（老版本是 `models/unet`），放错到
   `checkpoints` 里会被当成 checkpoint、`UNETLoader` 那边永远看不到——这种时候插件会把 ComfyUI 的
   校验错误翻成人话：缺哪个字段、给了什么值、它现在认哪些名字、文件该放哪个目录。
+- 用错加载方式也会解释：拿 checkpoint 节点去开一个没有 CLIP / VAE 的裸模型时，ComfyUI 只丢一句
+  `clip input is invalid: None`，插件会说明「这是裸模型 → 改用模型文件三件套、文件放 diffusion_models」；
+  显存不足、缺自定义节点也各有对应的一句话。
 - 只有 Windows 上的「打开文件夹」会真的弹资源管理器；其他平台返回一句说明。
 - 画图本身要联网，只有自检样图是纯本地的。
 

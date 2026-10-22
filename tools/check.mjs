@@ -1104,9 +1104,12 @@ try {
       if (u.pathname.endsWith('/prompt') && init.method === 'POST') {
         return overrides.prompt ? overrides.prompt(init) : jsonResponse({ prompt_id: 'p-1', number: 1 });
       }
-      if (u.pathname.startsWith('/history/')) return jsonResponse({
-        'p-1': { status: { status_str: 'success', completed: true }, outputs: { 9: { images: [{ filename: 'out.png', subfolder: '', type: 'output' }] } } },
-      });
+      if (u.pathname.startsWith('/history/')) {
+        if (overrides.history) return overrides.history();
+        return jsonResponse({
+          'p-1': { status: { status_str: 'success', completed: true }, outputs: { 9: { images: [{ filename: 'out.png', subfolder: '', type: 'output' }] } } },
+        });
+      }
       if (u.pathname.endsWith('/view')) return new Response(comfyPng, { status: 200, headers: { 'content-type': 'image/png' } });
       if (u.pathname.endsWith('/upload/image')) return jsonResponse({ name: 'uploaded.png', subfolder: '' });
       return new Response('nope', { status: 404 });
@@ -1208,6 +1211,44 @@ try {
     );
     check(explained.includes('anima-base-v1.0.safetensors'), '报错里列出 ComfyUI 现有可用的名字', explained);
     check(comfy.explainNodeErrors({ prompt_id: 'x' }) === null, '没有节点错误时不瞎编');
+
+    const clipInvalid = String(comfy.explainExecError('ERROR: clip input is invalid: None'));
+    check(
+      clipInvalid.includes('裸模型') && clipInvalid.includes('diffusion_models') && clipInvalid.includes('qwen_3_06b_base'),
+      'checkpoint 里没有 CLIP/VAE 时说清「是裸模型、改用三件套、文件要放对目录」',
+      clipInvalid,
+    );
+    check(
+      String(comfy.explainExecError('No VAE weights detected, VAE not initalized.')).includes('三件套'),
+      '只缺 VAE 的那半句也能认出来',
+    );
+    check(String(comfy.explainExecError('CUDA out of memory. Tried to allocate 2.00 GiB')).includes('显存'), '显存不足单独给提示');
+    check(comfy.explainExecError('Prompt outputs failed validation') === '', '认不出的报错不乱翻译');
+
+    stubComfy({
+      history: () =>
+        jsonResponse({
+          'p-1': {
+            status: {
+              status_str: 'error',
+              completed: false,
+              messages: [['execution_error', { exception_message: 'ERROR: clip input is invalid: None' }]],
+            },
+            outputs: {},
+          },
+        }),
+    });
+    let bareModelErr = null;
+    try {
+      await comfy.comfyDraw({ baseUrl: 'http://comfy.test', ckpt: 'ck.safetensors', prompt: '猫', size: '512x512', seed: 1, timeoutMs: 5000 });
+    } catch (err) {
+      bareModelErr = err;
+    }
+    check(
+      bareModelErr?.status === 400 && String(bareModelErr.message).includes('裸模型'),
+      '执行阶段的报错同样翻成人话再交给工具回执',
+      String(bareModelErr?.message),
+    );
 
     stubComfy({ prompt: () => jsonResponse(notInList, 400) });
     let notListedErr = null;

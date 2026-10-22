@@ -491,6 +491,36 @@ export function pickImage(outputs) {
   return all.find((it) => it.type === 'output') ?? all[0];
 }
 
+/** 执行阶段报错的常见成因 → 人话（认不出就空串，用原话）。 */
+const EXEC_HINTS = [
+  {
+    test: /no vae weights detected|no clip\/text encoder weights|clip input is invalid|vae input is invalid|text encoder model will not be loaded/i,
+    hint:
+      '这个 checkpoint 里没有 CLIP / VAE 权重——它是「裸模型」（Anima、Flux、Qwen-Image 这类都是）。' +
+      '改成「模型文件」三件套：UNet 选这个文件、文本编码器选配套的那个（Anima 用 qwen_3_06b_base，编码器类型 qwen_image）、VAE 选配套的；' +
+      '文件本身要放在 ComfyUI/models/diffusion_models（老版本 models/unet），不能留在 checkpoints。',
+  },
+  {
+    test: /out of memory|cuda error|allocation on device/i,
+    hint: '显存不够：把尺寸、批量或步数调小，或者换更小 / 量化的模型。',
+  },
+  {
+    test: /no module named|cannot import name|missing node|node .* not found/i,
+    hint: 'ComfyUI 缺节点或缺 Python 依赖：按报错里的名字在 ComfyUI-Manager 里装，装完重启 ComfyUI。',
+  },
+];
+
+/**
+ * 把执行阶段的报错翻成人话；认不出返回空串。
+ * 例：checkpoint 里没有 CLIP/VAE 时 ComfyUI 只丢一句 `clip input is invalid: None`。
+ */
+export function explainExecError(text) {
+  const raw = String(text ?? '');
+  const hit = EXEC_HINTS.find((it) => it.test.test(raw));
+  if (!hit) return '';
+  return `${hit.hint}（ComfyUI 原话：${snippet(raw, 200)}）`;
+}
+
 function execErrorText(entry) {
   const messages = Array.isArray(entry?.status?.messages) ? entry.status.messages : [];
   for (const pair of messages) {
@@ -525,7 +555,8 @@ export async function waitForImages(baseUrl, promptId, { timeoutMs = 300000, onT
       continue;
     }
     if (entry.status?.status_str === 'error') {
-      throw new ComfyError(`ComfyUI 画图出错：${execErrorText(entry)}`, { status: 400, promptId });
+      const raw = execErrorText(entry);
+      throw new ComfyError(`ComfyUI 画图出错：${explainExecError(raw) || raw}`, { status: 400, promptId });
     }
     const picked = pickImage(entry.outputs);
     if (picked) return picked;
