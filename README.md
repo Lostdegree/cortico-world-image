@@ -270,7 +270,7 @@ pnpm add "D:\path\to\cortico-world-image" --ignore-workspace
 | `apiKeySecret` | `IMAGE_API_KEY` | 密钥的**变量名**：先看部署 `.env`，再退到同级的端点 `.env` |
 | `model` | `gpt-image-1` | 模型名（没配 `models` 时用它） |
 | `models` | 空 | 模型链：一串后端按优先级顺序试，见下面「模型链」（0.4.0 起） |
-| `size` | `1024x1024` | 尺寸，`auto` 或留空就不发这个参数 |
+| `size` | `1024x1024` | 尺寸：`1024x1536`、比例 `16:9`/`4:3`、或 `square`/`portrait`/`landscape`；`auto` 或留空＝不指定（云端不发这个参数，本地按图生图规则处理） |
 | `quality` | `auto` | `low`/`medium`/`high` 或 `standard`/`hd`；`auto` 不发 |
 | `format` | `png` | 接口没给格式时按这个存盘（`png`/`jpeg`/`webp`） |
 | `timeoutMs` | `180000` | 单次画图等待上限 |
@@ -486,9 +486,12 @@ cortico-world-image/
 - `image_edit` 先走 `/images/edits`（multipart 上传）；端点没这条路由（404/405）时自动退回
   `/images/generations` 的 `image` 扩展字段（data URI，阿里云百炼那类）。两条路都不通时会回一条
   带 HTTP 码的错误，不是静默失败。
-- 改图的尺寸：ComfyUI 那档**不传 `size` 时会照参考图的比例**出图（最长边压到 1536、对齐 8），
-  传了 `size` 就按给的；云端那档走接口自己的默认（一般不传尺寸）。所以改一张 1600×1200 的图
-  不会变成方图，但也不会保持原始分辨率。
+- 尺寸：`size` 能写 `1024x1536`、比例 `16:9` / `4:3`、或 `square` / `portrait` / `landscape`（中文
+  `竖图` / `横图` / `方图` 也认），比例会换成一套对齐好的尺寸（16:9 → 1344×768，4:3 → 1152×864）；
+  写死的数字只按 latent 要求对齐到 8，不动你写的整数。
+- 改图的尺寸：ComfyUI 那档**不传 `size`、或写 `auto`，就照参考图的比例**出图（最长边压到 1536、对齐
+  16），传了 `size` 就按给的；云端那档走接口自己的默认（一般不传尺寸）。所以改一张 1600×1200 的图
+  会出 1536×1152，不会变成方图。图生图的回执/作品页记的是**实际出的尺寸**，不再是 `auto`。
 - 模型链的 ComfyUI 那档**不会替你下模型**：checkpoint / LoRA 得先放进 ComfyUI 的
   `models/checkpoints`、`models/loras`，`ckpt` 写文件名；本机没开 ComfyUI 时这档直接算不可用，
   链会落到下一档。**裸 UNet 要放 `models/diffusion_models`**（老版本是 `models/unet`），放错到

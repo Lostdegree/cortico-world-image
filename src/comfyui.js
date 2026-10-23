@@ -86,12 +86,66 @@ async function requestJson(target, { method = 'GET', body, timeoutMs = 30000, wh
 // 尺寸 / LoRA / 工作流
 // ---------------------------------------------------------------------------
 
-/** `1024x1536` → `{ width, height }`；`auto`、空、写错都退回 1024×1024。 */
+const SIZE_MIN = 64;
+const SIZE_MAX = 4096;
+const SIZE_STEP = 16;
+
+/** 把任意数字掰成 16 的倍数（DiT 的 patch 是 2、latent 是 8，16 两者都够用）。 */
+function snapDim(value, step = SIZE_STEP) {
+  const n = Math.round(Number(value));
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Math.max(SIZE_MIN, Math.min(SIZE_MAX, Math.round(n / step) * step));
+}
+
+/** 常见比例直接给一套对齐好的尺寸（面积都在 1024×1024 上下，SDXL 的常用桶）。 */
+const RATIO_SIZES = {
+  '1:1': { width: 1024, height: 1024 },
+  '4:3': { width: 1152, height: 864 },
+  '3:4': { width: 864, height: 1152 },
+  '3:2': { width: 1216, height: 832 },
+  '2:3': { width: 832, height: 1216 },
+  '16:9': { width: 1344, height: 768 },
+  '9:16': { width: 768, height: 1344 },
+  '21:9': { width: 1536, height: 656 },
+  '9:21': { width: 656, height: 1536 },
+};
+
+const SIZE_ALIASES = {
+  square: '1:1', '方图': '1:1', '正方形': '1:1', '1x1': '1:1',
+  landscape: '4:3', '横图': '4:3', '横屏': '4:3', '4x3': '4:3',
+  portrait: '3:4', '竖图': '3:4', '竖屏': '3:4', '3x4': '3:4',
+  wide: '16:9', '宽屏': '16:9', tall: '9:16', '长图': '9:16',
+};
+
+/**
+ * 认尺寸的写法：`1024x1536`、`4:3`、`16:9`、`square`/`portrait`/`横图`…
+ * `auto`、`default`、空串、认不出的词 → `null`（调用方走默认值）。
+ * @returns {{width: number, height: number} | null}
+ */
+export function parseSize(size) {
+  const raw = String(size ?? '').trim().toLowerCase();
+  if (!raw) return null;
+  const wh = /^(\d{2,5})\s*[x×*]\s*(\d{2,5})$/.exec(raw);
+  if (wh) {
+    // 用户写死的尺寸只按 latent 的要求对齐到 8，不动他写的整数（800x600 就还是 600）。
+    const width = snapDim(wh[1], 8);
+    const height = snapDim(wh[2], 8);
+    return width && height ? { width, height } : null;
+  }
+  const ratio = SIZE_ALIASES[raw] ?? (/^\d{1,3}\s*[:：/]\s*\d{1,3}$/.test(raw) ? raw.replace(/[：/]/, ':') : '');
+  if (!ratio) return null;
+  const preset = RATIO_SIZES[ratio];
+  if (preset) return { ...preset };
+  // 不常见的比例：按 1024×1024 的面积反推，再对齐到 16。
+  const [a, b] = ratio.split(':').map(Number);
+  if (!(a > 0 && b > 0)) return null;
+  const width = Math.sqrt((1024 * 1024 * a) / b);
+  return { width: snapDim(width), height: snapDim(width * (b / a)) };
+}
+
+/** `1024x1536` / `16:9` → `{ width, height }`；`auto`、空、写错都退回 `fallback` 的方图。 */
 export function sizeToWH(size, fallback = 1024) {
-  const m = /^\s*(\d{2,5})\s*[x×*]\s*(\d{2,5})\s*$/i.exec(String(size ?? ''));
-  if (!m) return { width: fallback, height: fallback };
-  const dim = (v) => Math.max(64, Math.min(4096, Math.round(Number(v) / 8) * 8));
-  return { width: dim(m[1]), height: dim(m[2]) };
+  return parseSize(size) ?? { width: snapDim(fallback), height: snapDim(fallback) };
 }
 
 /**
@@ -153,18 +207,22 @@ export function imageSize(bytes) {
   return null;
 }
 
-/** 按比例缩到 `maxSide` 以内，并对齐到 8 的倍数。 */
+/** 按比例缩到 `maxSide` 以内；要缩就对齐到 16，本来就够小就保持原样（只按 latent 对齐 8）。 */
 export function fitSize({ width, height }, maxSide = 1536) {
   const w = Math.max(1, Number(width) || 0);
   const h = Math.max(1, Number(height) || 0);
   const scale = Math.min(1, maxSide / Math.max(w, h));
-  const dim = (v) => Math.max(64, Math.min(4096, Math.round((v * scale) / 8) * 8));
-  return { width: dim(w), height: dim(h) };
+  const step = scale < 1 ? SIZE_STEP : 8;
+  return { width: snapDim(w * scale, step), height: snapDim(h * scale, step) };
 }
 
-/** 图生图尺寸：用户给了就用；没给就按参考图比例缩到 1536 以内。 */
+/**
+ * 图生图尺寸：给了能认的尺寸（`1024x1024`、`4:3`…）就用它；没给、或写的是 `auto`，
+ * 就按参考图比例缩到 1536 以内——别一律拉成方图。
+ */
 export function imageToSize(bytes, size) {
-  if (String(size ?? '').trim()) return String(size).trim();
+  const explicit = parseSize(size);
+  if (explicit) return `${explicit.width}x${explicit.height}`;
   const dim = imageSize(bytes);
   if (!dim) return size;
   const fit = fitSize(dim);
@@ -686,7 +744,7 @@ export async function comfyDraw(opts = {}) {
   const promptId = await submitPrompt(opts.baseUrl, workflow, { timeoutMs: Math.min(timeoutMs, 30000) });
   const picked = await waitForImages(opts.baseUrl, promptId, { timeoutMs, onTick: opts.onTick });
   const { bytes, mime } = await fetchImage(opts.baseUrl, picked, { timeoutMs: Math.min(timeoutMs, 60000) });
-  return { bytes, mime: sniffMime(bytes) ?? mime, revisedPrompt: null, promptId, image: picked };
+  return { bytes, mime: sniffMime(bytes) ?? mime, revisedPrompt: null, promptId, image: picked, size: `${width}x${height}` };
 }
 
 /**
@@ -712,7 +770,7 @@ export async function comfyEdit(opts = {}) {
   const promptId = await submitPrompt(opts.baseUrl, workflow, { timeoutMs: Math.min(timeoutMs, 30000) });
   const picked = await waitForImages(opts.baseUrl, promptId, { timeoutMs, onTick: opts.onTick });
   const { bytes, mime } = await fetchImage(opts.baseUrl, picked, { timeoutMs: Math.min(timeoutMs, 60000) });
-  return { bytes, mime: sniffMime(bytes) ?? mime, revisedPrompt: null, promptId, image: picked };
+  return { bytes, mime: sniffMime(bytes) ?? mime, revisedPrompt: null, promptId, image: picked, size: `${width}x${height}` };
 }
 
 /** 自定义模板里的占位符取值。 */

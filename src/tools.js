@@ -32,7 +32,8 @@ export const TOOL_SPECS = [
         },
         size: {
           type: 'string',
-          description: 'Override the configured size, e.g. 1024x1024 or 1024x1536.',
+          description:
+            'Override the configured size: "1024x1536", a ratio like "16:9" or "4:3", or "square" / "portrait" / "landscape".',
         },
         quality: {
           type: 'string',
@@ -59,7 +60,12 @@ export const TOOL_SPECS = [
         image: { type: 'string', description: 'Absolute path of the source picture, or a picture id from image_gallery.' },
         model: { type: 'string', description: 'Optional chain entry name. Leave empty to try the chain in priority order.' },
         note: { type: 'string', description: 'Short label for the result in the studio list.' },
-        size: { type: 'string', description: 'Override the configured size.' },
+        size: {
+          type: 'string',
+          description:
+            'Override the output size: "1024x1024", a ratio like "16:9", or "square" / "portrait" / "landscape". ' +
+            'Leave it empty to keep the source picture ratio (local ComfyUI) — that is the usual choice for edits.',
+        },
         quality: { type: 'string', description: 'Override the configured quality. Ignored by ComfyUI.' },
       },
       required: ['prompt', 'image'],

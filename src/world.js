@@ -360,7 +360,7 @@ export class ImageWorld {
       const label = entryLabel(used);
       const shown = res.revisedPrompt ? String(res.revisedPrompt) : prompt;
       const note = asText(args.note);
-      const dims = size || used.size || 'auto';
+      const dims = res.size || size || used.size || 'auto';
       const { item, warning } = this.#saveSafe({
         bytes: res.bytes,
         mime: res.mime,
@@ -413,7 +413,7 @@ export class ImageWorld {
       const label = entryLabel(used);
       const shown = res.revisedPrompt ? String(res.revisedPrompt) : prompt;
       const note = asText(args.note);
-      const dims = size || used.size || 'auto';
+      const dims = res.size || size || used.size || 'auto';
       const { item, warning } = this.#saveSafe({
         bytes: res.bytes,
         mime: res.mime,
@@ -464,7 +464,7 @@ export class ImageWorld {
         prefix: 'coopanion',
         timeoutMs: entry.timeoutMs,
       });
-      return { bytes: res.bytes, mime: res.mime, revisedPrompt: null, promptId: res.promptId };
+      return { bytes: res.bytes, mime: res.mime, revisedPrompt: null, promptId: res.promptId, size: res.size };
     }
     const key = this.#entryKey(entry);
     if (!key) {
@@ -508,7 +508,7 @@ export class ImageWorld {
         prefix: 'coopanion',
         timeoutMs: entry.timeoutMs,
       });
-      return { bytes: res.bytes, mime: res.mime, revisedPrompt: null, promptId: res.promptId };
+      return { bytes: res.bytes, mime: res.mime, revisedPrompt: null, promptId: res.promptId, size: res.size };
     }
     const key = this.#entryKey(entry);
     if (!key) {

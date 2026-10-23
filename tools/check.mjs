@@ -1025,8 +1025,11 @@ try {
   check(wh.width === 1024 && wh.height === 768, '1024x768 原样');
   const wh2 = comfy.sizeToWH('1001x777');
   check(wh2.width % 8 === 0 && wh2.height % 8 === 0 && wh2.width >= 64, '尺寸对齐到 8 的倍数', `${wh2.width}x${wh2.height}`);
+  const wh8 = comfy.sizeToWH('800x600');
+  check(wh8.width === 800 && wh8.height === 600, '写死的尺寸原样用（只按 latent 对齐）', `${wh8.width}x${wh8.height}`);
   const wh3 = comfy.sizeToWH('nonsense');
-  check(wh3.width === 1024 && wh3.height === 1024, '写坏了退回 1024');
+  check(wh3.width === 1024 && wh3.height === 1024, '写坏了退回 1024 方图');
+  check(comfy.sizeToWH('auto').width === 1024 && comfy.parseSize('auto') === null, 'size=auto 当成「没指定」');
 
   // 图生图靠图片字节认比例
   const pngBytes = Buffer.alloc(33);
@@ -1057,6 +1060,23 @@ try {
   check(comfy.imageToSize(pngBytes, '512x512') === '512x512', '图生图给了尺寸就用给的');
   check(comfy.imageToSize(pngBytes, '') === '1536x1152', '图生图没给尺寸就跟参考图比例');
   check(comfy.imageToSize(Buffer.from('nope, definitely not an image'), '') === '', '认不出图就不猜');
+
+  // 尺寸还能写比例 / 常用别名
+  const ratio169 = comfy.parseSize('16:9');
+  check(ratio169?.width === 1344 && ratio169?.height === 768, '比例 16:9 换成对齐好的 1344x768', JSON.stringify(ratio169));
+  const portrait = comfy.parseSize('竖图');
+  check(portrait?.width === 864 && portrait?.height === 1152, '「竖图」按 3:4 出 864x1152', JSON.stringify(portrait));
+  check(comfy.parseSize('Square')?.width === 1024, '别名不分大小写（Square）');
+  const oddRatio = comfy.parseSize('7:5');
+  check(oddRatio?.width === 1216 && oddRatio?.height % 16 === 0, '少见比例按面积反推再对齐', JSON.stringify(oddRatio));
+  check(comfy.imageToSize(pngBytes, '4:3') === '1152x864', '图生图指定比例就按比例，不再跟原图');
+  check(
+    comfy.imageToSize(pngBytes, 'auto') === '1536x1152',
+    'size=auto 时图生图按参考图比例（旧配置里写的 auto 不会再压成方图）',
+    comfy.imageToSize(pngBytes, 'auto'),
+  );
+  const wf43 = comfy.img2ImgWorkflow({ ckpt: 'ck.safetensors', prompt: '猫', image: 'up.png', size: '4:3' });
+  check(wf43['11'].inputs.width === 1152 && wf43['11'].inputs.height === 864, '比例尺寸真的进了 ImageScale', JSON.stringify(wf43['11'].inputs));
 
   const loras = comfy.parseLoras(['add_detail:0.6', { name: 'x.safetensors', strength: 0.4 }]);
   check(loras.length === 2 && loras[0].strength === 0.6 && loras[1].strength === 0.4, 'LoRA 两种写法都认', JSON.stringify(loras));
@@ -1119,6 +1139,7 @@ try {
     stubComfy();
     const drawn = await comfy.comfyDraw({ baseUrl: 'http://comfy.test', ckpt: 'ck.safetensors', prompt: '猫', size: '512x512', seed: 1, timeoutMs: 5000 });
     check(drawn.bytes.equals(comfyPng) && drawn.mime === 'image/png' && drawn.promptId === 'p-1', '提交 → 等 → 取图整条走通', `${drawn.promptId}`);
+    check(drawn.size === '512x512', '结果里带实际出的尺寸（作品页按它记）', drawn.size);
     check(comfyCalls.some((c) => c.path === '/prompt' && c.method === 'POST'), '提交走 POST /prompt');
     check(comfyCalls.some((c) => c.path.startsWith('/history/')), '等结果查 /history/<id>');
     check(comfyCalls.some((c) => c.path === '/view'), '取图走 /view');
@@ -1146,6 +1167,25 @@ try {
       editedSized.bytes.length > 0 && sizedWf['11'].inputs.width === 768 && sizedWf['11'].inputs.height === 768,
       '图生图给了尺寸就听给的',
       JSON.stringify(sizedWf['11'].inputs),
+    );
+
+    // 旧配置里 `size: "auto"` 会被带进每一档——不能再把图生图压成方图
+    comfyCalls.length = 0;
+    await comfy.comfyEdit({ baseUrl: 'http://comfy.test', ckpt: 'ck.safetensors', prompt: '改成水彩', image: comfyPng, mime: 'image/png', size: 'auto', timeoutMs: 8000 });
+    const autoWf = JSON.parse(comfyCalls.filter((c) => c.path === '/prompt').at(-1).body).prompt;
+    check(
+      autoWf['11'].inputs.width === 1536 && autoWf['11'].inputs.height === 1152,
+      'size=auto 的图生图跟参考图比例（1600×1200 → 1536×1152）',
+      JSON.stringify(autoWf['11'].inputs),
+    );
+
+    comfyCalls.length = 0;
+    const editedRatio = await comfy.comfyEdit({ baseUrl: 'http://comfy.test', ckpt: 'ck.safetensors', prompt: '改成水彩', image: comfyPng, mime: 'image/png', size: '16:9', timeoutMs: 8000 });
+    const ratioWf = JSON.parse(comfyCalls.filter((c) => c.path === '/prompt').at(-1).body).prompt;
+    check(
+      editedRatio.size === '1344x768' && ratioWf['11'].inputs.width === 1344 && ratioWf['11'].inputs.height === 768,
+      '图生图写比例 16:9 按比例出图',
+      `${editedRatio.size} / ${JSON.stringify(ratioWf['11'].inputs)}`,
     );
 
     comfyCalls.length = 0;
