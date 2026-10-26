@@ -13,7 +13,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, statSync } from 'node
 import { extname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { ImageApiError, editImage, generateImage } from './api.js';
+import { ImageApiError, editImage, generateImage, normalizeCloudSize } from './api.js';
 import { ChainError, chainSnapshot, entryLabel, entryState, parseChainEntries, runChain } from './chain.js';
 import { applyChatImagePatches, consolePort, patchBackupStatus, requestConsoleRestart, resolveAppRoot, restoreChatImagePatches } from './chat-image-patch.js';
 import { comfyDraw, comfyEdit, listModels, probe as probeComfy } from './comfyui.js';
@@ -360,7 +360,8 @@ export class ImageWorld {
       const label = entryLabel(used);
       const shown = res.revisedPrompt ? String(res.revisedPrompt) : prompt;
       const note = asText(args.note);
-      const dims = res.size || size || used.size || 'auto';
+      const sentSize = used.preset === 'openai' ? normalizeCloudSize(size || used.size) : '';
+      const dims = res.size || sentSize || size || used.size || 'auto';
       const { item, warning } = this.#saveSafe({
         bytes: res.bytes,
         mime: res.mime,
@@ -381,6 +382,7 @@ export class ImageWorld {
         item,
         warning,
         attempts: res.attempts,
+        hint: this.#sizeHint(used, size),
       });
     } catch (err) {
       return this.#failure('image_draw', err);
@@ -413,7 +415,8 @@ export class ImageWorld {
       const label = entryLabel(used);
       const shown = res.revisedPrompt ? String(res.revisedPrompt) : prompt;
       const note = asText(args.note);
-      const dims = res.size || size || used.size || 'auto';
+      const sentSize = used.preset === 'openai' ? normalizeCloudSize(size || used.size) : '';
+      const dims = res.size || sentSize || size || used.size || 'auto';
       const { item, warning } = this.#saveSafe({
         bytes: res.bytes,
         mime: res.mime,
@@ -434,6 +437,7 @@ export class ImageWorld {
         item,
         warning,
         attempts: res.attempts,
+        hint: this.#sizeHint(used, size),
       });
     } catch (err) {
       return this.#failure('image_edit', err);
@@ -593,6 +597,17 @@ export class ImageWorld {
     return item;
   }
 
+  /**
+   * 云端那档只认「宽x高」：别名会被换成三档之一，认不出来的干脆不发。
+   * 换掉的不吭声（结果就是你要的方向），**没发**的必须在回执里说一句，否则用户会以为尺寸生效了。
+   */
+  #sizeHint(entry, sizeArg) {
+    if (entry?.preset !== 'openai') return '';
+    const asked = asText(sizeArg) || asText(entry.size);
+    if (!asked || normalizeCloudSize(asked)) return '';
+    return `提示：云端这档不认 size「${asked}」，这次没带 size、按它的默认尺寸出图；要指定就写「1024x1536」或「16:9」。`;
+  }
+
   /** 工具回执：文本给模型读，blob 交给 Core 进上下文。 */
   #outcome(spec) {
     const bytes = spec.bytes;
@@ -601,6 +616,7 @@ export class ImageWorld {
     const lines = [spec.verb];
     if (spec.item) lines.push(`文件：${spec.item.path}`);
     lines.push(`参数：${spec.size || '默认尺寸'} · ${spec.model || '默认模型'} · ${kb} KB`);
+    if (spec.hint) lines.push(spec.hint);
     if (Array.isArray(spec.attempts) && spec.attempts.length) {
       lines.push(`前几档没成：${spec.attempts.map((it) => `${it.name}（${it.message}）`).join('；')}`);
     }
@@ -674,7 +690,7 @@ export class ImageWorld {
       ],
       panels: [
         { id: 'gallery', title: t.panelGalleryTitle, description: t.panelGalleryDesc, getMethods: ['list'] },
-        { id: 'status', title: t.panelStatusTitle, description: t.panelStatusDesc, getMethods: ['state'] },
+        { id: 'status', title: t.panelStatusTitle, description: t.panelStatusDesc, getMethods: ['state', 'selftest'] },
       ],
       config: [configGroup(this.language)],
       promptDocs: [{
@@ -715,6 +731,8 @@ export class ImageWorld {
         case 'restart': return this.#askRestart('控制台手动请求');
         case 'setKey': return this.#setKey(list[0]);
         case 'clearKey': return this.#setKey('');
+        // 面板「自检」按钮发的是 status.selftest（旧版挂在 gallery 上），两处都认。
+        case 'selftest': return this.#selfTest();
         default: throw new Error(`未知面板方法：status.${method}`);
       }
     }

@@ -18,6 +18,39 @@ export class ImageApiError extends Error {
 
 const DEFAULT_TIMEOUT = 180000;
 
+/**
+ * 云端端点只认 `宽x高` 这种字面尺寸：把 `square` 这类别名原样发过去，
+ * 上游会以「无返回」包装成 503（issue #3）。这里先归一化，认不出来就干脆不发。
+ * 键都是小写、去掉空格之后的写法。
+ */
+const CLOUD_SIZE_ALIASES = {
+  square: '1024x1024', '1:1': '1024x1024', '方图': '1024x1024', '方形': '1024x1024', '正方形': '1024x1024',
+  portrait: '1024x1536', '3:4': '1024x1536', '9:16': '1024x1536', '竖图': '1024x1536', '竖屏': '1024x1536', '竖版': '1024x1536',
+  landscape: '1536x1024', '4:3': '1536x1024', '3:2': '1536x1024', '16:9': '1536x1024', '横图': '1536x1024', '横屏': '1536x1024', '横版': '1536x1024',
+};
+
+/**
+ * 云端那档的 `size` 归一化：返回合法的 `宽x高`，`auto`/空/认不出来返回 ''（调用方就别发这个字段）。
+ * 字面尺寸原样保留（`1792x1024` 这类也认），只把 `×`/`*` 统一成 `x`。
+ */
+export function normalizeCloudSize(size) {
+  const raw = String(size ?? '').trim().toLowerCase().replace(/\s+/g, '');
+  if (!raw || raw === 'auto') return '';
+  const wh = /^(\d{2,5})[x×*](\d{2,5})$/.exec(raw);
+  if (wh) return `${Number(wh[1])}x${Number(wh[2])}`;
+  const alias = CLOUD_SIZE_ALIASES[raw];
+  if (alias) return alias;
+  // 任意 a:b：按横竖落到云端那三档上（方/横/竖）。
+  const ratio = /^(\d+(?:\.\d+)?):(\d+(?:\.\d+)?)$/.exec(raw);
+  if (ratio) {
+    const a = Number(ratio[1]);
+    const b = Number(ratio[2]);
+    if (a > 0 && b > 0) return a === b ? '1024x1024' : (a > b ? '1536x1024' : '1024x1536');
+  }
+  return '';
+}
+
+
 function joinUrl(baseUrl, path) {
   const base = String(baseUrl ?? '').trim().replace(/[/\s]+$/, '');
   if (!base) throw new ImageApiError('没有配置接口地址');
@@ -175,11 +208,11 @@ async function materialize(json, { timeoutMs, format }) {
   throw new ImageApiError('接口返回里既没有 base64 也没有图片地址');
 }
 
-/** 画图请求体：`n` 固定 1，size / quality 是 auto 就不发。 */
+/** 画图请求体：`n` 固定 1；size 归一化成 `宽x高`（别名云端不认），认不出来就不发；quality 是 auto 也不发。 */
 function generationBody(opts) {
   const body = { model: opts.model, prompt: opts.prompt, n: 1 };
-  const size = String(opts.size ?? '').trim();
-  if (size && size.toLowerCase() !== 'auto') body.size = size;
+  const size = normalizeCloudSize(opts.size);
+  if (size) body.size = size;
   const quality = String(opts.quality ?? '').trim();
   if (quality && quality.toLowerCase() !== 'auto') body.quality = quality;
   return body;
@@ -233,8 +266,8 @@ export async function editImage(opts = {}) {
   form.set('model', String(opts.model ?? ''));
   form.set('prompt', String(opts.prompt ?? ''));
   form.set('n', '1');
-  const size = String(opts.size ?? '').trim();
-  if (size && size.toLowerCase() !== 'auto') form.set('size', size);
+  const size = normalizeCloudSize(opts.size);
+  if (size) form.set('size', size);
   const quality = String(opts.quality ?? '').trim();
   if (quality && quality.toLowerCase() !== 'auto') form.set('quality', quality);
   form.set('image', new Blob([opts.image], { type: opts.mime ?? 'image/png' }), opts.name ?? 'image.png');

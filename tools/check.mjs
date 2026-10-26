@@ -541,6 +541,65 @@ try {
     calls = stubFetch([['/images/generations', () => jsonResponse({ data: [{ b64_json: tinyB64 }] })]]);
     await api.generateImage({ ...editOpts, image: undefined });
     check(!('image' in JSON.parse(String(calls[0].init.body))), 'image_draw 的请求体里没有 image 字段');
+
+    // 6. size 别名（issue #3）：云端只吃「宽x高」，别名必须换掉；认不出来的干脆不发。
+    const cloudSizeCases = [
+      ['square', '1024x1024'],
+      ['1:1', '1024x1024'],
+      ['方图', '1024x1024'],
+      ['portrait', '1024x1536'],
+      ['9:16', '1024x1536'],
+      ['landscape', '1536x1024'],
+      ['16:9', '1536x1024'],
+      ['4:3', '1536x1024'],
+      ['21:9', '1536x1024'],
+      ['1024x1536', '1024x1536'],
+      ['1792x1024', '1792x1024'],
+      ['1024×1024', '1024x1024'],
+      ['auto', ''],
+      ['', ''],
+      ['超大图', ''],
+    ];
+    let badSize = null;
+    for (const [input, want] of cloudSizeCases) {
+      const got = api.normalizeCloudSize(input);
+      if (got !== want) badSize = `${input} → ${got || '(空)'}，期望 ${want || '(空)'}`;
+    }
+    check(!badSize, '云端尺寸归一化：别名换成宽x高、字面尺寸原样、认不出来不发', badSize ?? '');
+
+    calls = stubFetch([['/images/generations', () => jsonResponse({ data: [{ b64_json: tinyB64 }] })]]);
+    await api.generateImage({ ...editOpts, image: undefined, size: 'square' });
+    check(JSON.parse(String(calls[0].init.body)).size === '1024x1024', 'size=square 发给云端前换成 1024x1024（以前原样发、必 503）', String(JSON.parse(String(calls[0].init.body)).size));
+
+    calls = stubFetch([['/images/generations', () => jsonResponse({ data: [{ b64_json: tinyB64 }] })]]);
+    await api.generateImage({ ...editOpts, image: undefined, size: '16:9' });
+    check(JSON.parse(String(calls[0].init.body)).size === '1536x1024', 'size=16:9 换成 1536x1024');
+
+    calls = stubFetch([['/images/generations', () => jsonResponse({ data: [{ b64_json: tinyB64 }] })]]);
+    await api.generateImage({ ...editOpts, image: undefined, size: '怪尺寸' });
+    check(!('size' in JSON.parse(String(calls[0].init.body))), '认不出的 size 不发，交给服务端默认（不再 503）');
+
+    calls = stubFetch([['/images/edits', () => jsonResponse({ data: [{ b64_json: tinyB64 }] })]]);
+    await api.editImage({ ...editOpts, size: 'portrait' });
+    check(calls[0].init.body.get('size') === '1024x1536', 'multipart 那条路的 size 也换成长宽', String(calls[0].init.body.get('size')));
+
+    // 7. 世界层：云端那档 + 认不出的 size，回执照实说一句（以前是静默按默认尺寸出图）。
+    const cloudWorld = definition.create({
+      cfg: {
+        ...definition.defaults(),
+        enabled: true,
+        models: JSON.stringify([{ name: 'cloud', preset: 'openai', baseUrl: 'https://api.test/v1', model: 'gpt-image-1', apiKeySecret: 'IMAGE_API_KEY' }]),
+      },
+      dataDir,
+      botDir,
+      packageDir: pkgDir,
+      secret: (name) => (name === 'IMAGE_API_KEY' ? 'sk-x' : ''),
+      storeSecret: () => {},
+    });
+    calls = stubFetch([['/images/generations', () => jsonResponse({ data: [{ b64_json: tinyB64 }] })]]);
+    const drewOdd = await cloudWorld.tools().find((t) => t.name === 'image_draw').handler({ prompt: '猫', size: '怪尺寸' });
+    check(drewOdd && !drewOdd.failed, '云端那档能出图', JSON.stringify(drewOdd).slice(0, 100));
+    check(String(drewOdd.text).includes('不认 size'), '认不出的 size 在回执里说了一句，不是静默', String(drewOdd.text).split('\n')[2]);
   } finally {
     globalThis.fetch = realFetch;
   }
@@ -548,6 +607,11 @@ try {
   section('离线自检样图（落盘 → 索引 → 取图）');
   const self = await world.invoke('gallery', 'selftest', []);
   check(self?.ok === true && self.item?.id, 'selftest 返回条目');
+  // 面板「自检」按钮发的是 status.selftest（issue #3：以前只挂在 gallery 上，点了必报未知方法）。
+  const selfStatus = await world.invoke('status', 'selftest', []);
+  check(selfStatus?.ok === true && selfStatus.item?.id, 'status 面板也能自检（面板按钮走的就是这条）');
+  check(existsSync(selfStatus.item.path), 'status 自检的图也真落盘了', String(selfStatus.item?.path));
+  await world.invoke('gallery', 'remove', [selfStatus.item.id]); // 别影响后面「只有一张」的断言
   check(existsSync(self.item.path), '图片真的落盘了', String(self.item?.path));
   const bytes = readFileSync(self.item.path);
   check(bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])), 'PNG 魔术字节正确');
