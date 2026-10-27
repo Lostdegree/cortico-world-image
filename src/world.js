@@ -69,6 +69,8 @@ let PATCH_STATE = {
   restartPending: false,
   /** 这次启动从桌宠包里还原掉的旧补丁文件（0.3.0 起才有）。 */
   reverted: [],
+  /** 新版 QQ 扩展（qq-final）那两处补丁这次在不在：在才敢在回执里教模型直接写图片路径。 */
+  qqFinal: false,
   error: '',
   restart: null,
   /** 手动还原的记录：`{at, restored:[id], failed:[id], byFile:[{file,backup,state}]}`，没还原过就是 null。 */
@@ -95,6 +97,7 @@ function refreshPatchState({ stateDir, log } = {}) {
     stuck: report.stuck,
     restartPending: report.restartPending,
     reverted: report.reverted?.filter((r) => r.reverted).map((r) => r.file) ?? [],
+    qqFinal: report.results.some((r) => r.id === 'qqf-image-paths' && (r.state === 'patched' || r.state === 'done')),
     error: report.error ?? '',
     restored: report.patched.length ? null : PATCH_STATE.restored,
   };
@@ -623,7 +626,12 @@ export class ImageWorld {
     if (spec.note) lines.push(`名字：${spec.note}`);
     if (spec.prompt) lines.push(`画面：${spec.prompt}`);
     if (spec.warning) lines.push(spec.warning);
-    lines.push('图已进入本次对话，也显示在「图片工坊」页。要发给某人或某个群，就把上面那行 `[blob …]` 的句柄交给那个世界的发图工具（官方 QQ 扩展是 `qq_draft` 的 `image`；旧版 QQ 扩展是 `qq_send_image`，填文件绝对路径）。');
+    lines.push(
+      '图已进入本次对话，也显示在「图片工坊」页。要发给某人或某个群，就把上面那行 `[blob …]` 的句柄交给那个世界的发图工具'
+      + '（官方 QQ 扩展是 `qq_draft` 的 `image`；旧版 QQ 扩展是 `qq_send_image`，填文件绝对路径'
+      + (PATCH_STATE.qqFinal ? '；新版 QQ 扩展（qq-final）在 `qq_send` 的正文里写 `[图片:文件绝对路径]`' : '')
+      + '）。',
+    );
     return {
       text: lines.join('\n'),
       blobs: [{
@@ -901,6 +909,7 @@ export class ImageWorld {
       stuck: false,
       restartPending: false,
       error: res.error ?? '',
+      qqFinal: false,
       restored: {
         at,
         restored: res.restored,
