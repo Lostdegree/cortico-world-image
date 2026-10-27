@@ -1013,6 +1013,53 @@ try {
     rmSync(qqfWork, { recursive: true, force: true });
   }
 
+  // 0.5.8：coopanion 的工作区是 <根>/data/home/companion/workspace，不在 cwd 正下方，
+  // 老助手只按 [imageDir, cwd] 找 → 模型写 blobs/xxx.jpg 时永远找不到（用户真机复现）。
+  const wsRoot = mkdtempSync(join(tmpdir(), 'image-qqf-ws-'));
+  try {
+    mkdirSync(join(wsRoot, 'data', 'home', 'companion', 'workspace', 'blobs'), { recursive: true });
+    const wsImg = join(wsRoot, 'data', 'home', 'companion', 'workspace', 'blobs', 'b.png');
+    writeFileSync(wsImg, 'x');
+    const cwdBefore = process.cwd();
+    process.chdir(wsRoot);
+    try {
+      check(resolvePathImage('blobs/b.png', join(wsRoot, 'ext', 'images')) === resolve(wsImg), '相对路径顺着 cwd 往上找到 companion 工作区（blobs/xxx.jpg）');
+      check(resolvePathImage('workspace/blobs/b.png', '') === null, '只认常见的几条工作区路径，瞎拼的不认');
+      check(resolvePathImage('../b.png', '') === null, '带 .. 的一律拒绝，不越界读文件');
+    } finally {
+      process.chdir(cwdBefore);
+    }
+  } finally {
+    rmSync(wsRoot, { recursive: true, force: true });
+  }
+
+  // 老助手（0.5.7 那一版）要能整段换成新版，而且不会留下两份。
+  const v1At = qqfNormText.indexOf('function resolvePathImage(');
+  const v1End = qqfNormText.indexOf('\n}\n', v1At) + 3;
+  const qqfV1 = [
+    qqfNormText.slice(0, qqfNormText.lastIndexOf('/** coopanion-chat-image', v1At)),
+    [
+      '/** coopanion-chat-image: 老版助手。 */',
+      'function resolvePathImage(fname: string, imageDir: string): string | null {',
+      "  const bases = isAbsolute(fname) || /^[a-zA-Z]:/.test(fname) ? [''] : [imageDir, process.cwd()].filter(Boolean);",
+      '  return bases.length ? resolve(bases[0], fname) : null;',
+      '}',
+      '',
+    ].join('\n'),
+    qqfNormText.slice(v1End),
+  ].join('');
+  check(!qqfPaths.done(qqfV1), '0.5.7 那一版助手（只按 cwd 找）不算新版');
+  const qqfV1Fixed = qqfPaths.apply(qqfV1);
+  check(!qqfV1Fixed?.error && qqfPaths.done(qqfV1Fixed?.text ?? ''), '老版助手能被整段换成新版', String(qqfV1Fixed?.error ?? 'ok'));
+  check((qqfV1Fixed?.text ?? '').split('function resolvePathImage(').length - 1 === 1, '换助手不会留下两份');
+  check((qqfV1Fixed?.text ?? '').includes("'data', 'home', 'companion', 'workspace'"), '新助手会顺着目录往上找工作区');
+
+  // 真装的 qq-final 是 CRLF：整段替换也得按它的换行来（0.5.8 第一版就栽在这儿）。
+  const qqfV1Crlf = qqfV1.split('\n').join('\r\n');
+  const qqfV1CrlfFixed = qqfPaths.apply(qqfV1Crlf);
+  check(!qqfV1CrlfFixed?.error && qqfPaths.done(qqfV1CrlfFixed?.text ?? ''), 'CRLF 的老版助手也能整段换成新版', String(qqfV1CrlfFixed?.error ?? 'ok'));
+  check((qqfV1CrlfFixed?.text ?? '').includes("companion', 'workspace'));\r\n"), '换完还是 CRLF 换行，来源文件风格没被打乱');
+
   const qqfHints = patchMod.rulesFor('qqf-image-hints');
   check(typeof qqfHints?.done === 'function' && typeof qqfHints?.apply === 'function', 'qq-final 说明补丁有 done/apply');
   const qqfWorldFixture = [

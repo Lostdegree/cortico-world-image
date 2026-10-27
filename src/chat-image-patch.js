@@ -220,11 +220,35 @@ const QQF_RESOLVE_FN = [
   '  try {',
   "    let p = String(fname || '').trim();",
   '    if (!p || p.length > 1024) return null;',
+  '    if (/(^|[\\\\/])\\.\\.([\\\\/]|$)/.test(p)) return null;',
   "    if (/^file:/i.test(p)) p = decodeURIComponent(p.replace(/^file:\\/\\/\\/?/i, ''));",
   '    if (!/\\.(?:gif|png|jpe?g|webp|bmp)$/i.test(p)) return null;',
-  "    const bases = isAbsolute(p) || /^[a-zA-Z]:/.test(p) ? [''] : [imageDir, process.cwd()].filter(Boolean);",
+  '    const abs = isAbsolute(p) || /^[a-zA-Z]:/.test(p);',
+  '    const bases = [];',
+  '    const add = (b) => {',
+  '      if (b && bases.indexOf(b) < 0) bases.push(b);',
+  '    };',
+  '    add(imageDir);',
+  '    add(process.cwd());',
+  '    if (!abs) {',
+  '      // coopanion 的工作区不在 cwd 正下方（实况是 <根>/data/home/companion/workspace），',
+  '      // 所以从 cwd 与图片库目录逐级往上找几层，把常见的几条工作区路径都当成基底。',
+  '      const starts = [process.cwd(), imageDir].filter(Boolean);',
+  '      for (const start of starts) {',
+  '        let dir = resolve(start);',
+  '        for (let i = 0; i < 6; i += 1) {',
+  '          add(dir);',
+  "          add(resolve(dir, 'workspace'));",
+  "          add(resolve(dir, 'blobs'));",
+  "          add(resolve(dir, 'data', 'home', 'companion', 'workspace'));",
+  "          const up = resolve(dir, '..');",
+  '          if (up === dir) break;',
+  '          dir = up;',
+  '        }',
+  '      }',
+  '    }',
   '    for (const base of bases) {',
-  '      const candidate = base ? resolve(base, p) : resolve(p);',
+  '      const candidate = abs ? resolve(p) : resolve(base, p);',
   '      if (existsSync(candidate)) return candidate;',
   '    }',
   '    return null;',
@@ -233,6 +257,9 @@ const QQF_RESOLVE_FN = [
   '  }',
   '}',
 ].join('\n');
+
+/** 认「助手是这一版」：v1（只按 cwd 找）与 v2（还往上找工作区）靠这句区分。 */
+const QQF_FN_MARK_V2 = "'data', 'home', 'companion', 'workspace'";
 
 /** 插在它后面（`buildOutgoing` 之前就定义好，函数声明提升也无所谓，但这样更好认）。 */
 const QQF_FN_ANCHOR = 'export const __resolveImageFileForTest = resolveImageFile;';
@@ -398,14 +425,28 @@ export function rulesFor(id) {
     // 新版第三方扩展（qq-final）：`[图片:…]` 先按图片库认，再认绝对/相对路径。
     case 'qqf-image-paths':
       return {
-        // 助手在 + 那段解析确实换成调用它了 + 标签行放宽了，才算打过（少一样都是半成品）。
-        done: (text) => text.includes('function resolvePathImage(') && text.includes(QQF_BRANCH_MARK) && text.includes(QQF_REGEX_MARK),
+        // 助手在（而且是我们这一版） + 那段解析确实换成调用它了 + 标签行放宽了，才算打过。
+        done: (text) =>
+          text.includes('function resolvePathImage(') &&
+          text.includes(QQF_FN_MARK_V2) &&
+          text.includes(QQF_BRANCH_MARK) &&
+          text.includes(QQF_REGEX_MARK),
         apply: (text) => {
           let work = text;
           if (!work.includes('function resolvePathImage(')) {
             const withFn = swap(work, QQF_FN_ANCHOR, `${QQF_FN_ANCHOR}\n\n${asWritten(QQF_RESOLVE_FN, nl(work))}`);
             if (withFn === null) return { error: `没找到图片名解析的锚点：${QQF_FN_ANCHOR}` };
             work = withFn;
+          } else if (!work.includes(QQF_FN_MARK_V2)) {
+            // 0.5.8：老版助手只按图片库目录和 cwd 找，coopanion 的工作区在 data/home/companion/workspace，
+            // 相对路径永远找不到 → 整段换成会往上找工作区的那一版。
+            const EOL = nl(work);
+            const at = work.indexOf('function resolvePathImage(');
+            const commentAt = work.lastIndexOf('/** coopanion-chat-image', at);
+            const start = commentAt >= 0 ? commentAt : at;
+            const stop = work.indexOf(`${EOL}}${EOL}`, at);
+            if (at < 0 || stop < 0) return { error: '老版 resolvePathImage() 的结构认不出来，没法整段替换' };
+            work = `${work.slice(0, start)}${asWritten(QQF_RESOLVE_FN, EOL)}${work.slice(stop + 1 + EOL.length)}`;
           }
           if (!work.includes(QQF_BRANCH_MARK)) {
             const branch = swap(work, asWritten(QQF_BRANCH_OLD, nl(work)), asWritten(QQF_BRANCH_NEW, nl(work)));

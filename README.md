@@ -108,7 +108,7 @@ pet_say({ script: '看，画好了。', images: ['<句柄>'] })  // 气泡里说
 
 | 补丁 id | 文件 | 做什么 |
 | --- | --- | --- |
-| `qqf-image-paths`（可选） | `<安装>\data\extensions\node_modules\cortico-world-qq-final\src\normalize.ts` | `[图片:…]` 还是先按图片库文件名解析（原行为不变），没找到再认绝对路径与进程工作目录相对路径；顺带把标签的匹配上限从 40 字放宽到 900 字 |
+| `qqf-image-paths`（可选） | `<安装>\data\extensions\node_modules\cortico-world-qq-final\src\normalize.ts` | `[图片:…]` 还是先按图片库文件名解析（原行为不变），没找到再认绝对路径与相对路径（会顺着目录往上找桌宠工作区）；顺带把标签的匹配上限从 40 字放宽到 900 字 |
 | `qqf-image-hints`（可选） | `<安装>\data\extensions\node_modules\cortico-world-qq-final\src\world.ts` | `qq_image` 的工具说明与 list 回执改成「文件名，或本机图片的绝对路径/相对工作目录路径」 |
 
 0.5.7 补的第二个坑：上游那行标签正则写死了「方括号里最多 40 个字符」
@@ -117,8 +117,12 @@ pet_say({ script: '看，画好了。', images: ['<句柄>'] })  // 气泡里说
 补丁只把 `表情包:` / `图片:` 这两种标签放宽到 900 字，普通 `[……]` 仍是 40 字，不会把长段括注误认成图片。
 
 补进去的 `resolvePathImage()` 只做三件事：`file://` 先还原成本地路径；只认图片扩展名
-（`.gif/.png/.jpg/.jpeg/.webp/.bmp`，免得被当成任意文件外传）；绝对路径直接用，相对路径先试图片库目录、
-再试 `process.cwd()`。**图片库那条原路径永远优先**，两条都不中仍然「静默丢标记」，与上游行为一致。
+（`.gif/.png/.jpg/.jpeg/.webp/.bmp`，免得被当成任意文件外传，含 `..` 的一律拒绝）；
+绝对路径直接用，相对路径则按「图片库目录 → `process.cwd()` → 从这两处逐级往上找 6 层」的顺序拼，
+每一层都试 `workspace`、`blobs`、`data/home/companion/workspace` 这几种常见写法——
+coopanion 的工作区是 `<安装>/data/home/companion/workspace`，既不在 `cwd` 正下方、也不在扩展目录里，
+只按 `cwd` 拼的话 `[图片:blobs/x.jpg]` 永远找不到（0.5.8）。**图片库那条原路径永远优先**，
+全都不中仍然「静默丢标记」，与上游行为一致。
 
 这两个包都是第三方的，升级会换目录、文件也会被覆写，所以走同一套自愈：找不到文件记 `absent`
 （没装这个扩展不算失败、不进总数），认不出它原来的写法记 `failed` 并且**不动那个文件**，
