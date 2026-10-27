@@ -101,6 +101,7 @@ const QQF_NORMALIZE_FIXTURE = [
   'export function buildOutgoing(inner: string, imageDir: string, segments: unknown[]): void {',
   "  if (inner.startsWith('文本:')) {",
   '    segments.push(inner);',
+  "  const re = /\\[([^\\[\\]]{1,40})\\]|@([^\\s@]{1,30})/g;",
   "      } else if (inner.startsWith('图片:')) {",
   "        const fname = inner.slice('图片:'.length).trim();",
   '        if (imageDir && fname) {',
@@ -210,7 +211,9 @@ function selfTest() {
     ok(!qqfPathsOut?.error, 'qq-final 的原文能改出来', qqfPathsOut?.error ?? '');
     ok((qqfPathsOut?.text ?? '').includes('function resolvePathImage(fname: string, imageDir: string): string | null {'), '插进了认绝对/相对路径的助手');
     ok((qqfPathsOut?.text ?? '').includes('|| resolvePathImage(fname, imageDir);'), '[图片:…] 那段先认图片库、再认路径');
+    ok((qqfPathsOut?.text ?? '').includes(String.raw`(?:表情包|图片):[^\[\]\n]{1,900}`), '标签行放宽到 900 字（70 字的绝对路径才认）');
     ok(qqfPaths.done(qqfPathsOut?.text ?? ''), '改完认成「已打过」（幂等）');
+    ok(qqfPaths.apply(qqfPathsOut?.text ?? '').text === qqfPathsOut?.text, '再打一次一个字都不动');
 
     const qqfHints = rulesFor('qqf-image-hints');
     ok(typeof qqfHints?.done === 'function' && typeof qqfHints?.apply === 'function', 'qqf-image-hints 有 done/apply');

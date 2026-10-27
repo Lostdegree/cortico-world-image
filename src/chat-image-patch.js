@@ -268,6 +268,17 @@ const QQF_BRANCH_NEW = [
 const QQF_BRANCH_MARK = '|| resolvePathImage(fname, imageDir);';
 
 /**
+ * `[图片:…]` 的标签匹配行：上游写死「方括号内最多 40 个字符」，
+ * 而一个 Windows 绝对路径（`[图片:G:\…\blobs\x.png]`）动辄 60–90 个字符——
+ * 正则根本匹配不到，整句原样当文本发出去，看着就像补丁没生效。
+ * 这里只把「表情包: / 图片:」这两种标签放宽到 900，其它 `[..]` 仍是 40。
+ */
+const QQF_REGEX_OLD = String.raw`  const re = /\[([^\[\]]{1,40})\]|@([^\s@]{1,30})/g;`;
+const QQF_REGEX_NEW = String.raw`  const re = /\[((?:表情包|图片):[^\[\]\n]{1,900}|[^\[\]]{1,40})\]|@([^\s@]{1,30})/g;`;
+/** 认「标签行已经放宽过了」。 */
+const QQF_REGEX_MARK = String.raw`(?:表情包|图片):[^\[\]\n]{1,900}`;
+
+/**
  * qq-final `world.ts` 里那两处「[图片:文件名]」的说明（`qq_image` 的工具说明 + list 回执）。
  * 模型只看得到说明，不改就永远只写文件名、绕开补丁。
  */
@@ -387,8 +398,8 @@ export function rulesFor(id) {
     // 新版第三方扩展（qq-final）：`[图片:…]` 先按图片库认，再认绝对/相对路径。
     case 'qqf-image-paths':
       return {
-        // 助手在 + 那段解析确实换成调用它了，才算打过（只插助手不换调用是没用的）。
-        done: (text) => text.includes('function resolvePathImage(') && text.includes(QQF_BRANCH_MARK),
+        // 助手在 + 那段解析确实换成调用它了 + 标签行放宽了，才算打过（少一样都是半成品）。
+        done: (text) => text.includes('function resolvePathImage(') && text.includes(QQF_BRANCH_MARK) && text.includes(QQF_REGEX_MARK),
         apply: (text) => {
           let work = text;
           if (!work.includes('function resolvePathImage(')) {
@@ -396,12 +407,18 @@ export function rulesFor(id) {
             if (withFn === null) return { error: `没找到图片名解析的锚点：${QQF_FN_ANCHOR}` };
             work = withFn;
           }
-          if (work.includes(QQF_BRANCH_MARK)) return { text: work };
-          const branch = swap(work, asWritten(QQF_BRANCH_OLD, nl(work)), asWritten(QQF_BRANCH_NEW, nl(work)));
-          if (branch === null) {
-            return { error: `没找到 [图片:…] 那段解析（新版 QQ 扩展版本变了）：${QQF_BRANCH_OLD.split('\n')[0].trim()}` };
+          if (!work.includes(QQF_BRANCH_MARK)) {
+            const branch = swap(work, asWritten(QQF_BRANCH_OLD, nl(work)), asWritten(QQF_BRANCH_NEW, nl(work)));
+            if (branch === null) {
+              return { error: `没找到 [图片:…] 那段解析（新版 QQ 扩展版本变了）：${QQF_BRANCH_OLD.split('\n')[0].trim()}` };
+            }
+            work = branch;
           }
-          return { text: branch };
+          // 0.5.7：标签内最多 40 字的上游限制会让长路径整条当文本发出去，一并放宽。
+          if (work.includes(QQF_REGEX_MARK)) return { text: work };
+          const widened = swap(work, asWritten(QQF_REGEX_OLD, nl(work)), asWritten(QQF_REGEX_NEW, nl(work)));
+          if (widened === null) return { error: `没找到 [..] 标签的匹配行：${QQF_REGEX_OLD.trim()}` };
+          return { text: widened };
         },
       };
     // 说明两处：`qq_image` 的工具说明 + list 回执里那句提示。

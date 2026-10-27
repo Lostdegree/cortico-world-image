@@ -929,6 +929,7 @@ try {
     '',
     "export function buildOutgoing(text: string, emojiDir = '', imageDir = '', imageTransport: 'path' | 'base64' = 'path'): OneBotSegment[] {",
     '  const segments: OneBotSegment[] = [];',
+    "  const re = /\\[([^\\[\\]]{1,40})\\]|@([^\\s@]{1,30})/g;",
     "      } else if (inner.startsWith('图片:')) {",
     "        const fname = inner.slice('图片:'.length).trim();",
     '        if (imageDir && fname) {',
@@ -952,6 +953,31 @@ try {
   check(qqfNormText.includes('export const __resolveImageFileForTest = resolveImageFile;\n\n/**'), '助手插在原锚点之后、buildOutgoing 之前');
   check(qqfPaths.done(qqfNormText), '改完认成「已打过」');
   check(qqfPaths.apply(qqfNormText).text === qqfNormText, '再打一次一个字都不动（幂等）');
+
+  // 0.5.7：上游那行正则只认「方括号里 40 个字以内」，而 Windows 绝对路径动辄 70 字，
+  // 正则匹配不到 → 整条 `[图片:G:\…]` 当普通文本发出去（用户真机复现）。这里只放宽图片/表情包两种标签。
+  const qqfTagRegex = (text) => {
+    const line = text.split('\n').find((l) => l.includes('const re = /'));
+    if (!line) return null;
+    const body = line.slice(line.indexOf('const re = ') + 'const re = '.length);
+    return new RegExp(body.slice(1, body.lastIndexOf('/')));
+  };
+  check(qqfNormText.includes(String.raw`(?:表情包|图片):[^\[\]\n]{1,900}`), '标签行放宽到 900 字');
+  const qqfTagRe = qqfTagRegex(qqfNormText);
+  const qqfRealTag = '[图片:G:\\test\\Coopanion\\data\\home\\companion\\workspace\\blobs\\solvay-me.png]';
+  const qqfTagHit = qqfTagRe ? qqfTagRe.exec(qqfRealTag) : null;
+  check(Boolean(qqfTagHit) && qqfTagHit[1].startsWith('图片:'), '70 字的 Windows 绝对路径标签匹配得上（用户复现的那条）', JSON.stringify(qqfTagHit ? qqfTagHit[1].slice(0, 10) : null));
+  const qqfLongPlain = `[${'很长的说明文字'.repeat(7)}]`;
+  check(!(qqfTagRe && qqfTagRe.exec(qqfLongPlain)), '普通的长方括号文本仍然不算标签', String(qqfLongPlain.length));
+  // 老版本补丁（助手 + 分支都在、标签行还是 40 字）要能补宽，且不重复插助手。
+  const qqfHalfPatched = qqfNormText
+    .split('\n')
+    .map((l) => (l.includes('const re = /') ? String.raw`  const re = /\[([^\[\]]{1,40})\]|@([^\s@]{1,30})/g;` : l))
+    .join('\n');
+  check(!qqfPaths.done(qqfHalfPatched), '只打过旧版补丁（标签行没放宽）不算「已打过」');
+  const qqfHalfFixed = qqfPaths.apply(qqfHalfPatched);
+  check(!qqfHalfFixed?.error && qqfPaths.done(qqfHalfFixed?.text ?? ''), '再打一次就能把标签行补宽', String(qqfHalfFixed?.error ?? 'ok'));
+  check((qqfHalfFixed?.text ?? '').split('function resolvePathImage(').length - 1 === 1, '补宽标签行不会把助手插第二遍');
   const qqfCrlf = qqfPaths.apply(qqfNormFixture.split('\n').join('\r\n'));
   check(!qqfCrlf?.error && qqfPaths.done(qqfCrlf?.text ?? ''), 'CRLF 的源文件也认得', String(qqfCrlf?.error ?? 'ok'));
   check((qqfCrlf?.text ?? '').includes('// 补丁:先认图片库文件名,再认绝对路径与工作区相对路径。'), 'CRLF 下注释行跟着换行风格');

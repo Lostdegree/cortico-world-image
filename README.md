@@ -108,8 +108,13 @@ pet_say({ script: '看，画好了。', images: ['<句柄>'] })  // 气泡里说
 
 | 补丁 id | 文件 | 做什么 |
 | --- | --- | --- |
-| `qqf-image-paths`（可选） | `<安装>\data\extensions\node_modules\cortico-world-qq-final\src\normalize.ts` | `[图片:…]` 还是先按图片库文件名解析（原行为不变），没找到再认绝对路径与进程工作目录相对路径 |
+| `qqf-image-paths`（可选） | `<安装>\data\extensions\node_modules\cortico-world-qq-final\src\normalize.ts` | `[图片:…]` 还是先按图片库文件名解析（原行为不变），没找到再认绝对路径与进程工作目录相对路径；顺带把标签的匹配上限从 40 字放宽到 900 字 |
 | `qqf-image-hints`（可选） | `<安装>\data\extensions\node_modules\cortico-world-qq-final\src\world.ts` | `qq_image` 的工具说明与 list 回执改成「文件名，或本机图片的绝对路径/相对工作目录路径」 |
+
+0.5.7 补的第二个坑：上游那行标签正则写死了「方括号里最多 40 个字符」
+（`/\[([^\[\]]{1,40})\]|@…/g`），而一个 Windows 绝对路径光路径就 60–90 字，
+`[图片:G:\…\blobs\x.png]` 根本匹配不到 → 整条当普通文本发出去，用户看到的是文字不是图。
+补丁只把 `表情包:` / `图片:` 这两种标签放宽到 900 字，普通 `[……]` 仍是 40 字，不会把长段括注误认成图片。
 
 补进去的 `resolvePathImage()` 只做三件事：`file://` 先还原成本地路径；只认图片扩展名
 （`.gif/.png/.jpg/.jpeg/.webp/.bmp`，免得被当成任意文件外传）；绝对路径直接用，相对路径先试图片库目录、
