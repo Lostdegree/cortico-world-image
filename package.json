@@ -36,7 +36,8 @@
     "tools",
     "describe.json",
     "ENV_PROMPT.md",
-    "README.md"
+    "README.md",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "selfcheck": "node tools/prepublish.mjs",

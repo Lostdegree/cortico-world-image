@@ -15,7 +15,7 @@
 > **桌宠包本身完全不碰**：0.3.0 起改用官方的 `pet_say.images`，早先版本打进去的旧补丁会被自动还原。
 > 不愿意让脚本动那个第三方包，就把 QQ 扩展的补丁关掉（它认不出原文只会记一条失败，不会硬改）。
 >
-> MIT 许可，见 [LICENSE](LICENSE)。
+> MIT 许可，见 [LICENSE](LICENSE)；每个版本改了什么见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 它做了什么
 

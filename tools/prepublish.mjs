@@ -91,7 +91,7 @@ function shippedFiles(pkg) {
     if (statSync(abs).isDirectory()) walk(abs, out);
     else out.add(abs);
   }
-  for (const always of ['package.json', 'README.md', 'LICENSE']) {
+  for (const always of ['package.json', 'README.md', 'LICENSE', 'CHANGELOG.md']) {
     const abs = join(pkgDir, always);
     if (existsSync(abs)) out.add(abs);
   }
