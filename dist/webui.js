@@ -158,15 +158,13 @@ const ZH = {
   unknown: '未知',
   loadBad: '读不到作品列表',
   patchTitle: 'QQ 发图路径',
-  patchDesc: '只修「老版第三方 QQ 扩展」（qqbot，红色未读的那种）：它的 qq_send_image / qq_view_image 先按桌宠工作区解析、扩展目录兜底。新版 `qq-final` 从 0.6.28 起只发压缩包、没有源码可改，所以不打补丁——它只认自己图片库里的文件名，于是每张成品图都由本插件直接复制进那个图片库（目录见下），正文里写 [图片:文件名] 就能发。官方 QQ 扩展（qq）按 blob 句柄发图，也用不着。第三方包升级会把改动覆写掉，所以每次启动都重打一遍；打不上就显示在这里。',
+  patchDesc: '两代第三方 QQ 扩展的本地图片路径都修：旧版（qqbot）的 qq_send_image / qq_view_image 先按桌宠工作区解析、扩展目录兜底；新版（qq-final）的 `[图片:…]` 除了图片库里的文件名，还认绝对路径与工作目录相对路径。第三方包升级会把改动覆写掉，所以每次启动都重打一遍；打不上会显示在这里。官方 QQ 扩展（qq）按 blob 句柄发图，用不着这些补丁，切过去后自动跳过、不碰文件。',
   patchWhere: '安装目录',
   patchCount: '补丁',
   patchAt: '上次检查',
   patchLastRestart: '上次重启请求',
   patchAllDone: '处都在',
   patchNone: '没有要打补丁的 QQ 扩展',
-  patchQqFinalOn: '新版 QQ 扩展（qq-final）：每张成品图都会自动复制进它的图片库（就是下面这个目录），qq_send 正文里写 [图片:文件名] 就能直接发出去。',
-  patchQqFinalOff: '新版 QQ 扩展（qq-final）：每张成品图都会自动复制进它的图片库，宿主配置 worlds.qqbot.imageDir 指向别处也不影响发图（下面这个路径是复制目标）。想让两边共用一个目录，就把它指过来。',
   patchPending: '刚补上，重启后生效',
   patchMissing: '有没打上的',
   patchNoApp: '没找到安装目录',
@@ -176,7 +174,7 @@ const ZH = {
   patchRepatch: '重打补丁',
   patchRestore: '还原备份',
   patchRestoreAsk: '按备份还原补丁？',
-  patchRestoreBody: '用更新下发的原文（.coopanion-orig）把 QQ 扩展的源文件覆盖回去，发图恢复成上游行为（只认扩展目录），重启控制台后生效。备份不会删，随时能再打回来。',
+  patchRestoreBody: '用更新下发的原文（.coopanion-orig）把 QQ 扩展的源文件覆盖回去，发图恢复成上游行为（旧版只认扩展目录、新版只认图片库文件名），重启控制台后生效。备份不会删，随时能再打回来。',
   patchRestoreDone: '已按备份还原',
   patchRestoreNone: '没动：文件本来就是原文',
   patchRestoreBad: '还原出错',
@@ -316,15 +314,13 @@ const EN = {
   unknown: 'unknown',
   loadBad: 'Could not read the picture list',
   patchTitle: 'QQ Image Paths',
-  patchDesc: 'Only the legacy third-party QQ extension (qqbot) still gets patched: its qq_send_image / qq_view_image resolve against your pet workspace first, then the extension dir. The newer qq-final ships only a bundled file since 0.6.28, so there is no source to patch — it already sends `[图片:file-name]` looked up in its image library, and this card tells you where that is. The official QQ extension (qq) sends blob handles and needs neither. The updater overwrites changes, so they are re-applied on every start; anything that fails shows up here.',
+  patchDesc: 'Both third-party QQ extensions get their local picture paths fixed: the legacy one (qqbot) resolves qq_send_image / qq_view_image against your pet workspace first, and the new one (qq-final) accepts absolute or working-dir-relative paths in its `[图片:…]` tag instead of only image-library file names. The updater overwrites them, so they are re-applied on every start; anything that fails shows up here. With the official QQ extension (qq) pictures travel as blob handles, so these patches are skipped and no file is touched.',
   patchWhere: 'Install dir',
   patchCount: 'Patches',
   patchAt: 'Checked',
   patchLastRestart: 'Last restart request',
   patchAllDone: 'in place',
   patchNone: 'no QQ extension needs patching',
-  patchQqFinalOn: 'The newer QQ extension (qq-final): every finished picture is copied into its image library (the folder below), so writing [图片:file-name] in qq_send sends it directly.',
-  patchQqFinalOff: 'The newer QQ extension (qq-final): every finished picture is copied into its image library, so sends work even when worlds.qqbot.imageDir points elsewhere (the path below is the copy target). Point it here if you want both to share one folder.',
   patchPending: 'applied, takes effect after restart',
   patchMissing: 'some are missing',
   patchNoApp: 'install directory not found',
@@ -334,7 +330,7 @@ const EN = {
   patchRepatch: 'Re-apply',
   patchRestore: 'Restore from backup',
   patchRestoreAsk: 'Restore the patches from backup?',
-  patchRestoreBody: 'Overwrites the QQ extension sources with the updater-shipped originals (.coopanion-orig); picture sending goes back to upstream behaviour (the legacy extension only accepts its own folder) after a console restart. Backups are kept, so you can re-apply any time.',
+  patchRestoreBody: 'Overwrites the QQ extension sources with the updater-shipped originals (.coopanion-orig); picture sending goes back to upstream behaviour (the legacy extension only accepts its own folder, the new one only image-library names) after a console restart. Backups are kept, so you can re-apply any time.',
   patchRestoreDone: 'Restored from backup',
   patchRestoreNone: 'Nothing changed: files were already pristine',
   patchRestoreBad: 'Restore failed',
@@ -1221,12 +1217,6 @@ function statusPanel(ctx) {
       if (!b.hasBackup) patchLines.appendChild(ctx.ui.h('div', 'iw-sub', `${b.id} — ${tx.patchBackupNone}`));
     }
     if (p?.stuck) patchLines.appendChild(ctx.ui.h('div', 'iw-sub', tx.patchStuck));
-    // 新版 QQ 扩展不打补丁，只认它自己的图片库目录：这里直接说清楚指没指过来。
-    if (p?.qqFinal && !p.qqFinal.sameDir) {
-      patchLines.appendChild(ctx.ui.h('div', 'iw-sub', `${tx.patchQqFinalOff} ${currentDir || p.dir || ''}`.trim()));
-    } else if (p?.qqFinal) {
-      patchLines.appendChild(ctx.ui.h('div', 'iw-sub', tx.patchQqFinalOn));
-    }
   };
 
   const render = (s) => {

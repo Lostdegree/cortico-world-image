@@ -7,16 +7,15 @@
 
 > **性质说明**：这是给 Coopanion 写的**非官方**扩展，走的是框架公开的扩展接口
 > （`kind: world` + `webUiClient` 面板 + 必需的 `describe.json` 自描述）。唯一伸手动别人的地方是「QQ 发图路径」
-> 那两处可选补丁——它按锚点改写**老版第三方 QQ 扩展**（`cortico-world-qq-better-alont1` 的 `src/world.ts`）的源码，
-> 改之前留一份 `.coopanion-orig` 备份，程序自动更新覆写后会自己补回来（细节与还原方式见那一节）。
-> 新版 `cortico-world-qq-final` 从 0.6.28 起只发 `dist/`，**没有源码可改、也不再打补丁**：
-> 它只认「图片库目录」里的文件名，本扩展负责把成品图复制进那个目录、把 `[图片:文件名]` 算好（`qqDeliverImage()`），你不用改配置。
+> 那几处可选补丁——它按锚点改写**第三方 QQ 扩展**的源码（旧版 `cortico-world-qq-better-alont1` 的 `src/world.ts`、
+> 新版 `cortico-world-qq-final` 的 `src/normalize.ts` 与 `src/world.ts`），改之前留一份
+> `.coopanion-orig` 备份，程序自动更新覆写后会自己补回来（细节与还原方式见那一节）。
 > 补丁只给**正在用的那个 QQ 扩展**打：读 `<安装>\data\home\companion\config.json`，
 > `worlds.qqbot.enabled` 不是 `true`（比如已经切到官方 `cortico-world-qq`）就整段跳过，一个字节都不碰。
 > **桌宠包本身完全不碰**：0.3.0 起改用官方的 `pet_say.images`，早先版本打进去的旧补丁会被自动还原。
 > 不愿意让脚本动那个第三方包，就把 QQ 扩展的补丁关掉（它认不出原文只会记一条失败，不会硬改）。
 >
-> MIT 许可，见 [LICENSE](LICENSE)；每个版本改了什么见 [CHANGELOG.md](CHANGELOG.md)。
+> MIT 许可，见 [LICENSE](LICENSE)。
 
 ## 它做了什么
 
@@ -33,7 +32,7 @@
 
 1. **进对话**：工具回执带 `blobs`，Core 会把它 intern 成句柄，图片作为图片分片进入模型上下文与日志，所以桌宠自己看得见自己画的东西。
 2. **进作品页**：扩展自带控制台页「图片工坊 → 作品」，缩略图墙、看大图、复制路径、删除、清空、打开文件夹、离线自检样图。
-3. **发给别人**：回执文本里带着**绝对路径与 blob 句柄**，交给已有的渠道工具就能真的发出去——旧版 QQ 扩展用 `qq_send_image`（填绝对路径）；新版 `cortico-world-qq-final` 在 `qq_send` 正文里写 `[图片:文件名]`（本扩展已把成品图复制进它的图片库并把标签算好，见下文）；官方 `cortico-world-qq` 用 `qq_draft` 的 `image` 填句柄。
+3. **发给别人**：回执文本里带着**绝对路径**，交给已有的渠道工具就能真的发出去——旧版 QQ 扩展用 `qq_send_image`（填绝对路径），新版 `cortico-world-qq-final` 在 `qq_send` 正文里写 `[图片:绝对路径]`（本扩展的补丁让它认路径，见下文）。
 
 > 为什么不让图直接出现在桌宠气泡里？框架当前的聊天时间线只有**用户侧**消息带图片槽位
 > （`src/web/client/features/chat/index.ts` 的 `ChatItem` 联合里只有 `kind: 'user'` 带 `images`），
@@ -103,48 +102,38 @@ pet_say({ script: '看，画好了。', images: ['<句柄>'] })  // 气泡里说
 （装配层没给工作区时退回老行为）；绝对路径原样返回。工具的参数说明也跟着改成同一口径——
 模型只看得到说明，说明不改它不敢写短路径。
 
-**新版 `cortico-world-qq-final`（0.6.x）：不用补丁，改复制**。它的发图不是工具参数，而是**正文标记**
-`[图片:文件名]`——`buildOutgoing()` 只在图片库目录（配置 `worlds.qqbot.imageDir`，默认扩展目录下的 `images/`，
-相对值按扩展目录解析）里找文件，绝对路径、`..` 一律拒绝，找不到就把整条标记当普通文本发出去。
-0.6.28 起它**只发布压缩后的 `dist/index.js`**（维护版才有 `src/`），已经没有源码文件可改，
-所以 0.6.0 起这个扩展不再给它打补丁；0.6.1 起改成一件更省事的事——**把成品图复制进它的图片库**：
+**新版 `cortico-world-qq-final`（0.6.x）**：发图不是工具参数，而是**正文标记** `[图片:文件名]`——
+`buildOutgoing()` 只在图片库目录（配置 `imageDir`，默认扩展目录下的 `images/`）里找文件，绝对路径、`..` 一律拒绝。
+图片工坊的图存在自己的数据目录，于是写进正文只会被**静默丢掉**：模型看到「已发送」，用户那边没有图。
 
-1. **复制 + 算标签**：`qqDeliverImage(appRoot, imagePath)` 读宿主配置拿到它的图片库目录，
-   图不在里面就把 PNG 原样复制进去（同名、比大小，重复调用不反复写盘），再算出
-   `[图片:文件名]` 交给模型抄；图本来就在里面就只算标签、不复制。
-2. **回执里写清楚**：工具回执会把标签单独放一行，并注明「图已放进它的图片库」，模型照抄就成——
-   用户**不用改任何配置**，也不再需要把 `worlds.qqbot.imageDir` 指到图片工坊。
-   复制失败（扩展目录只读之类）时才在回执里写清原因，并让把那个配置指过来。
+| 补丁 id | 文件 | 做什么 |
+| --- | --- | --- |
+| `qqf-image-paths`（可选） | `<安装>\data\extensions\node_modules\cortico-world-qq-final\src\normalize.ts` | `[图片:…]` 还是先按图片库文件名解析（原行为不变），没找到再认绝对路径与相对路径（会顺着目录往上找桌宠工作区）；顺带把标签的匹配上限从 40 字放宽到 900 字 |
+| `qqf-image-hints`（可选） | `<安装>\data\extensions\node_modules\cortico-world-qq-final\src\world.ts` | `qq_image` 的工具说明与 list 回执改成「文件名，或本机图片的绝对路径/相对工作目录路径」 |
 
-```jsonc
-// <安装>\data\home\companion\config.json —— 只有想两边共用同一目录时才需要改
-{ "worlds": { "qqbot": { "enabled": true, "imageDir": "G:/test/Coopanion/data/extensions/node_modules/cortico-world-qq-final/images" } } }
-```
+0.5.7 补的第二个坑：上游那行标签正则写死了「方括号里最多 40 个字符」
+（`/\[([^\[\]]{1,40})\]|@…/g`），而一个 Windows 绝对路径光路径就 60–90 字，
+`[图片:G:\…\blobs\x.png]` 根本匹配不到 → 整条当普通文本发出去，用户看到的是文字不是图。
+补丁只把 `表情包:` / `图片:` 这两种标签放宽到 900 字，普通 `[……]` 仍是 40 字，不会把长段括注误认成图片。
 
-> 复制目标就是扩展解析的那个目录：没配 `imageDir` 时是 `<扩展目录>\images\`，配了绝对路径就用它。
-> 扩展升级会重装整个目录，里面的图会跟着没——但每次出图都会重新复制，所以不影响发图。
+补进去的 `resolvePathImage()` 只做三件事：`file://` 先还原成本地路径；只认图片扩展名
+（`.gif/.png/.jpg/.jpeg/.webp/.bmp`，免得被当成任意文件外传，含 `..` 的一律拒绝）；
+绝对路径直接用，相对路径则按「图片库目录 → `process.cwd()` → 从这两处逐级往上找 6 层」的顺序拼，
+每一层都试 `workspace`、`blobs`、`data/home/companion/workspace` 这几种常见写法——
+coopanion 的工作区是 `<安装>/data/home/companion/workspace`，既不在 `cwd` 正下方、也不在扩展目录里，
+只按 `cwd` 拼的话 `[图片:blobs/x.jpg]` 永远找不到（0.5.8）。**图片库那条原路径永远优先**，
+全都不中仍然「静默丢标记」，与上游行为一致。
 
-> 0.5.7–0.5.9 曾经给它打过两个补丁（放宽 40 字标签上限、`resolvePathImage()` 认绝对/相对路径）。
-> 0.6.28 之后那两个补丁的**目标文件不再存在**，会被记 `absent`；升级前打过补丁的机器也不用还原，
-> 那些 `src/*.ts` 已经随新版一起没了，补丁自然失效。
-
-### 第三个坑：标签正则只有 40 字（0.5.7 的历史记录）
-
-老版上游那行标签正则写死了「方括号里最多 40 个字符」（`/\[([^\[\]]{1,40})\]|@…/g`），
-而一个 Windows 绝对路径光路径就 60–90 字，`[图片:G:\…\blobs\x.png]` 根本匹配不到 → 整条当普通文本发。
-新版（0.6.36）读出来还是同一个 40 字上限，所以**只能走上面的「复制进图片库 + 只写文件名」**，别再指望长路径。
-
-### 自愈怎么工作
-
-**老版第三方 QQ 扩展（`qq-better`）那两处补丁**：这个包升级会换目录、文件也会被覆写，所以走自愈——
-找不到文件记 `absent`（没装这个扩展不算失败、不进总数），认不出它原来的写法记 `failed` 并且**不动那个文件**，
-原文备份是 `<文件名>.coopanion-orig`。改的是 TS 源码，**要重启才生效**。
+这两个包都是第三方的，升级会换目录、文件也会被覆写，所以走同一套自愈：找不到文件记 `absent`
+（没装这个扩展不算失败、不进总数），认不出它原来的写法记 `failed` 并且**不动那个文件**，
+原文备份同样是 `<文件名>.coopanion-orig`。改的是 TS 源码，**要重启才生效**。
 
 **切到别的 QQ 扩展就自动让路**：每个补丁都标了它服务的世界 id（`worldId: 'qqbot'`），
 应用时会读 `<安装>\data\home\companion\config.json` 的 `worlds.qqbot.enabled`——
 不是 `true`（例如官方 `cortico-world-qq` 顶替了它）就整段跳过，所有补丁记 `absent`、文件一个字节不动、
 不请求重启，状态页这张卡片也不显示备份行（0.3.1 起）。读不到配置时**不猜**，照旧检查并打补丁。
-新版 `qq-final` 完全不走这条路：它一个文件都不改，只读配置、把成品图复制进它的图片库再算标签。
+
+### 自愈怎么工作
 
 扩展模块的顶层代码**每次启动都会跑**（`loadExtensions()` 无差别 import 所有已装扩展，与
 `worlds.<id>.enabled` 无关），所以这里不用等用户做任何事：
@@ -561,8 +550,7 @@ README 里只写结论，**逐步命令、npm 账号/Token、registry、缓存�
 
 MIT，见 [LICENSE](LICENSE)。
 
-这是一个**非官方**扩展：与 Coopanion / cortico 的作者无关。QQ 发图路径那两处补丁会改写
-**老版第三方 QQ 扩展**（`cortico-world-qq-better-alont1` 的 `src/world.ts`）的源码，升级、重装或自动更新前
-请先看那一节并留好 `.coopanion-orig` 备份；`node tools/patch.mjs --restore` 就是按这些备份还原。
-新版 `cortico-world-qq-final` 不改一个文件（它只发 `dist/`，靠把成品图复制进它的图片库来对齐）。
-桌宠包本身不改（早先版本的旧补丁会被还原）。
+这是一个**非官方**扩展：与 Coopanion / cortico 的作者无关。QQ 发图路径那几处补丁会改写
+**第三方 QQ 扩展**的源码（旧版 `cortico-world-qq-better-alont1` 的 `src/world.ts`、新版 `cortico-world-qq-final` 的 `src/normalize.ts` 与 `src/world.ts`），
+升级、重装或自动更新前请先看那一节并留好 `.coopanion-orig` 备份；`node tools/patch.mjs --restore`
+就是按这些备份还原。桌宠包本身不改（早先版本的旧补丁会被还原）。
