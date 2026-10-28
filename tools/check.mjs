@@ -821,7 +821,7 @@ try {
 
   section('QQ 发图路径补丁（纯逻辑）');
   const patchMod = await import(pathToFileURL(join(pkgDir, 'src', 'chat-image-patch.js')).href);
-  for (const name of ['resolveAppRoot', 'patchSpecs', 'rulesFor', 'applyChatImagePatches', 'patchBackupStatus', 'restoreChatImagePatches', 'revertObsoletePetPatches', 'consolePort', 'requestConsoleRestart', 'qqFinalShare']) {
+  for (const name of ['resolveAppRoot', 'patchSpecs', 'rulesFor', 'applyChatImagePatches', 'patchBackupStatus', 'restoreChatImagePatches', 'revertObsoletePetPatches', 'consolePort', 'requestConsoleRestart', 'qqFinalShare', 'qqSendHint']) {
     check(typeof patchMod[name] === 'function', `导出 ${name}()`);
   }
   const specs = patchMod.patchSpecs('X:/not-a-real-app');
@@ -962,6 +962,59 @@ try {
   writeFileSync(join(qqfWorkspace, 'c.jpg'), 'x');
   const qqfRel = patchMod.qqFinalShare(qqfApp, join(qqfWorkspace, 'c.jpg'));
   check(qqfRel.imageDir === qqfWorkspace && qqfRel.tag === '[图片:c.jpg]', 'imageDir 配成相对路径就按扩展目录解析', JSON.stringify(qqfRel));
+
+  // 回执里那段话：模型只照着它写，所以措辞本身就是行为。写路径是实测踩过的坑 —— 用户看到
+  // 「[图片:G:\…\x.png]」原样发进群里，因为上游正则只认文件名、路径匹配不上就退化成文字。
+  const qqfHint = patchMod.qqSendHint(qqfRel, qqfWorkspace);
+  check(qqfHint.length === 2 && qqfHint[1] === '[图片:c.jpg]', '有标签时标签单独占一行给模型照抄', JSON.stringify(qqfHint));
+  check(qqfHint[0].includes('只能有文件名') && qqfHint[0].includes('普通文字'), '同时明说标签里只能有文件名、写路径会被当文字发', qqfHint[0]);
+  check(qqfHint[0].includes('qq_send'), '说清是写进 qq_send 的正文', qqfHint[0]);
+  const qqfHintMiss = patchMod.qqSendHint(qqfOutside, qqfWorkspace);
+  check(qqfHintMiss.length === 1 && qqfHintMiss[0].includes('图片库目录') && qqfHintMiss[0].includes('别在 QQ 里写路径'), '没标签时不提路径，只说该把哪个配置指过来', qqfHintMiss[0]);
+  check(patchMod.qqSendHint({ installed: false }).length === 0, '没装 qq-final 就不说这段');
+
+section('新版 QQ 扩展：把成品图复制进图片库（纯逻辑）');
+for (const name of ['qqDeliverImage']) {
+  check(typeof patchMod[name] === 'function', `导出 ${name}()`);
+}
+setQqImageDir('');
+const delivSrc = join(qqfRoot, 'outside.png');
+const deliv = patchMod.qqDeliverImage(qqfApp, delivSrc);
+check(
+  deliv.delivered === true && deliv.copied === true && deliv.tag === '[图片:outside.png]',
+  '库外的图会被复制进扩展的 images/ 并给出文件名标签',
+  JSON.stringify(deliv),
+);
+check(existsSync(join(qqfPkgDir, 'images', 'outside.png')), '文件真的落进扩展的 images/');
+const delivAgain = patchMod.qqDeliverImage(qqfApp, delivSrc);
+check(
+  delivAgain.delivered === true && delivAgain.copied === false && delivAgain.tag === deliv.tag,
+  '同一张图再调用一次不再写盘',
+  JSON.stringify(delivAgain),
+);
+const delivIn = patchMod.qqDeliverImage(qqfApp, qqfImg);
+check(
+  delivIn.delivered === true && delivIn.copied === false && delivIn.tag === '[图片:a.png]',
+  '本来就在库里的图只算标签、不复制',
+  JSON.stringify(delivIn),
+);
+check(
+  patchMod.qqDeliverImage(join(qqfRoot, 'nodata', 'resources', 'app'), delivSrc).delivered === false,
+  '没装扩展时什么都不做',
+);
+const delivHint = patchMod.qqSendHint(deliv, qqfRoot);
+check(
+  delivHint.length === 2 && delivHint[1] === '[图片:outside.png]' && delivHint[0].includes('图已放进它的图片库'),
+  '复制成功时回执里说清「图已放进它的图片库」',
+  JSON.stringify(delivHint),
+);
+const delivBad = { installed: true, tag: '', why: '复制到图片库失败：磁盘满了' };
+const delivBadHint = patchMod.qqSendHint(delivBad);
+check(
+  delivBadHint.length === 1 && delivBadHint[0].includes('磁盘满了') && delivBadHint[0].includes('别在 QQ 里写路径'),
+  '复制失败时把失败原因写进回执，并继续劝退写路径',
+  delivBadHint[0],
+);
   rmSync(qqfRoot, { recursive: true, force: true });
 
   check(!specs.some((s) => s.id.startsWith('qqf-')), 'qq-final 的补丁已经从清单里彻底去掉', specs.map((s) => s.id).join(','));

@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 
 import { ImageApiError, editImage, generateImage, normalizeCloudSize } from './api.js';
 import { ChainError, chainSnapshot, entryLabel, entryState, parseChainEntries, runChain } from './chain.js';
-import { applyChatImagePatches, consolePort, patchBackupStatus, qqFinalShare, requestConsoleRestart, resolveAppRoot, restoreChatImagePatches, samePath } from './chat-image-patch.js';
+import { applyChatImagePatches, consolePort, patchBackupStatus, qqDeliverImage, qqFinalShare, qqSendHint, requestConsoleRestart, resolveAppRoot, restoreChatImagePatches, samePath } from './chat-image-patch.js';
 import { comfyDraw, comfyEdit, listModels, probe as probeComfy } from './comfyui.js';
 import { DEFAULTS, ID, configGroup, text } from './config.js';
 import { Gallery } from './gallery.js';
@@ -636,19 +636,19 @@ export class ImageWorld {
     if (spec.note) lines.push(`名字：${spec.note}`);
     if (spec.prompt) lines.push(`画面：${spec.prompt}`);
     if (spec.warning) lines.push(spec.warning);
-    // 新版 QQ 扩展（qq-final）不长路径：它只在「图片库目录」里按文件名找图。图正好在那个目录里
-    // 就把标签算出来给模型抄；不在就明说该把哪个配置指过来（补丁没处可打了，0.6.28 起只发 dist）。
-    const qq = qqFinalShare(PATCH_STATE.appRoot || resolveAppRoot([PACKAGE_DIR, process.cwd()]), spec.item?.path ?? '');
-    const qqLine = qq.installed
-      ? (qq.tag
-        ? `；新版 QQ 扩展（cortico-world-qq-final）直接在 \`qq_send\` 正文里写 ${qq.tag}`
-        : `；新版 QQ 扩展（cortico-world-qq-final）只发图片库目录里的图（现在是 ${qq.imageDir}），这张不在其中——把它的「图片库目录」指到 ${this.dir()}，就能用 \`[图片:文件名]\` 发`)
-      : '';
+    // 新版 QQ 扩展（qq-final）不长路径：它只在「图片库目录」里按文件名找图，标签里最多 40 个字符。
+    // 所以这里直接把成品图复制进那个目录，再把 `[图片:文件名]` 单独给一行让模型照抄 —— 用户不用改配置。
+    const qq = qqDeliverImage(
+      PATCH_STATE.appRoot || resolveAppRoot([PACKAGE_DIR, process.cwd()]),
+      spec.item?.path ?? '',
+    );
+    lines.push(...qqSendHint(qq, this.dir()));
     lines.push(
-      '图已进入本次对话，也显示在「图片工坊」页。要发给某人或某个群，就把上面那行 `[blob …]` 的句柄交给那个世界的发图工具'
-      + '（官方 QQ 扩展是 `qq_draft` 的 `image`；旧版 QQ 扩展是 `qq_send_image`，填文件绝对路径'
-      + qqLine
-      + '）。',
+      qq?.delivered
+        ? '图已进入本次对话，也显示在「图片工坊」页。新版 QQ 扩展就照上面那行标签发；'
+          + '官方扩展用 `qq_draft` 的 `image`（填 `[blob …]` 句柄）；旧版 QQ 扩展用 `qq_send_image`（填文件绝对路径）。'
+        : '图已进入本次对话，也显示在「图片工坊」页。要发给某人或某个群，就把上面那行 `[blob …]` 的句柄交给那个世界的发图工具'
+          + '（官方 QQ 扩展是 `qq_draft` 的 `image`；旧版 QQ 扩展是 `qq_send_image`，填文件绝对路径）。',
     );
     return {
       text: lines.join('\n'),

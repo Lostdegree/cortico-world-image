@@ -305,6 +305,68 @@ export function qqFinalShare(appRoot, imagePath = '') {
   return out;
 }
 
+/**
+ * 把成品图放进新版 QQ 扩展的图片库，并算出该写什么标签。
+ *
+ * 为什么不指望配置：`worlds.qqbot.imageDir` 得用户自己指到图片工坊的目录，指错了就是
+ * 「发了但没图」（2026-10-28 真机就是这种：标签里的路径在图片库外面，扩展按普通文字发了）。
+ * 直接把文件复制进去，标签立刻可用；同名、比大小，重复调用不会反复写盘。
+ */
+export function qqDeliverImage(appRoot, imagePath = '') {
+  const share = qqFinalShare(appRoot, imagePath);
+  if (!share.installed || !imagePath) return { ...share, delivered: false, copied: false };
+  if (share.tag) return { ...share, delivered: true, copied: false };
+  const source = resolve(imagePath);
+  const name = basename(source);
+  const target = join(share.imageDir, name);
+  try {
+    const fresh = !existsSync(target) || statSync(target).size !== statSync(source).size;
+    if (fresh) {
+      mkdirSync(share.imageDir, { recursive: true });
+      copyFileSync(source, target);
+    }
+    return { ...share, tag: `[图片:${name}]`, why: '', delivered: true, copied: fresh, target };
+  } catch (err) {
+    return {
+      ...share,
+      delivered: false,
+      copied: false,
+      why: `复制到图片库失败：${err?.message ?? err}`,
+    };
+  }
+}
+
+/**
+ * 回执里那段「怎么发 QQ」的话（拆出来是为了能单测，也让措辞只有一处）。
+ *
+ * 为什么这么啰嗦：新版扩展的正则在方括号里最多认 40 个字符，且只在图片库目录里按**文件名**
+ * 找图。模型若把回执里那行绝对路径抄进标签（`[图片:G:\…\x.png]`），正则要么不匹配、要么拼出
+ * 一个不存在的文件，最后整段当普通文字发出去 —— 用户看到的就是「发了个路径」。所以：
+ * - 有标签：单独占一行、紧跟着说「只能有文件名」和「写路径会被当文字发出去」；
+ * - 没标签：它根本发不出去，不许再提路径，直接说该把 `worlds.qqbot.imageDir` 指到哪。
+ */
+export function qqSendHint(qq, shareDir = '') {
+  if (!qq?.installed) return [];
+  if (qq.tag && qq.delivered) {
+    return [
+      `发 QQ（新版 cortico-world-qq-final）：\`qq_send\` 正文里原样写下面这一行${qq.copied ? '（图已放进它的图片库）' : '（图本来就在它的图片库里）'}。`
+        + '标签里只能有文件名，写成 `[图片:任意路径]` 会被当成普通文字发出去：',
+      qq.tag,
+    ];
+  }
+  if (qq.tag) {
+    return [
+      '发 QQ（新版 cortico-world-qq-final）：`qq_send` 正文里原样写下面这一行。'
+        + '标签里只能有文件名，写成 `[图片:任意路径]` 会被当成普通文字发出去：',
+      qq.tag,
+    ];
+  }
+  return [
+    `发 QQ（新版 cortico-world-qq-final）：这张没能放进它的图片库${qq.why ? `（${qq.why}）` : ''}，写成标签也发不出去。`
+      + `把宿主配置 \`worlds.qqbot.imageDir\` 指到 ${shareDir || '图片工坊的目录'}，或让扩展目录可写，就能发；在那之前别在 QQ 里写路径。`,
+  ];
+}
+
 /** 两个目录是不是同一个（Windows 不分大小写，末尾斜杠也不算差别）。 */
 export function samePath(a, b) {
   const norm = (p) => {
