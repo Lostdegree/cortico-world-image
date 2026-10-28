@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.0
+
+- **新版 QQ 扩展（`cortico-world-qq-final` 0.6.28 起）不再打补丁**：它只发布压缩后的 `dist/index.js`，`src/normalize.ts` / `src/world.ts` 根本不存在，0.5.7–0.5.9 的那两处补丁无处可打。补丁清单从 4 处降到 2 处，状态页对 qq-final 的提示改成「去改目录」，不再提补丁。
+- 新增 `qqFinalShare(appRoot, imagePath)`：读宿主配置 `worlds.qqbot.imageDir`（默认扩展目录下的 `images/`，相对值按扩展目录解析），图片就在里面（含子目录）就把 `[图片:文件名]` 算好写进工具回执让模型抄；不在就明说该把哪个目录指过来。新版本来就是「只认图片库里的文件名」，从 0.6.36 反编出来的正则还写死 40 字上限（绝对路径 60–90 字永远匹配不到），所以指目录比改代码更稳。
+- 状态面板「QQ 发图路径」卡片多一行：qq-final 的图片库目录指到图片工坊了没有。指向别处时会直接把应填的路径写出来。
+- 修：回执里 `[图片:…]` 的提示从「无条件写一句」改成按实际情况说，不再让模型写出会被丢弃的绝对路径。
+- 旧的两处补丁原样保留（只针对老版 `cortico-world-qq-better-alont1`，没装就不进总数）。
+
 ## 0.5.8
 
 - 修新版 QQ 扩展里 `[图片:blobs/x.jpg]` 这类**相对路径**发了没反应：解析助手过去只按图片库目录与 `process.cwd()` 拼，而 coopanion 的桌宠工作区在 `<安装>\data\home\companion\workspace`，两头都拼不到。现在会从 `cwd` 与图片库目录逐级往上找 6 层，把 `workspace/`、`blobs/`、`data/home/companion/workspace/` 都当基底试一遍。

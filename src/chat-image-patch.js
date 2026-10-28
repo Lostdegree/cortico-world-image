@@ -18,7 +18,7 @@
  * 状态页报出来 —— 绝不猜着改。补丁一律幂等：靠 detect 文本判断。
  */
 import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const PET_PKG = 'cortico-world-desktop-pet';
@@ -83,16 +83,26 @@ export function resolveAppRoot(extra = []) {
  * - `COOPANION_EXTENSIONS_DIR` 指定 `<…>/extensions`（联调/别处安装）；
  * - `appRoot` 自己底下就有 `data/extensions`（副本自测时的摆法）。
  */
-function extensionFile(appRoot, pkg, rel) {
+function extensionDirs(appRoot, pkg) {
   const cands = [];
   const override = process.env.COOPANION_EXTENSIONS_DIR;
   if (override) {
     const dir = resolve(override);
-    cands.push(join(dir, 'node_modules', pkg, ...rel), join(dir, pkg, ...rel));
+    cands.push(join(dir, 'node_modules', pkg), join(dir, pkg));
   }
   for (const root of [dirname(dirname(resolve(appRoot))), resolve(appRoot)]) {
-    cands.push(join(root, 'data', 'extensions', 'node_modules', pkg, ...rel));
+    cands.push(join(root, 'data', 'extensions', 'node_modules', pkg));
   }
+  return cands;
+}
+
+/** 某个第三方扩展装在哪（装了就返回目录，没装返回空串）。 */
+function extensionDir(appRoot, pkg) {
+  return extensionDirs(appRoot, pkg).find((dir) => existsSync(dir)) ?? '';
+}
+
+function extensionFile(appRoot, pkg, rel) {
+  const cands = extensionDirs(appRoot, pkg).map((dir) => join(dir, ...rel));
   const hit = cands.find((c) => existsSync(c));
   return hit ?? cands[0] ?? '';
 }
@@ -100,11 +110,6 @@ function extensionFile(appRoot, pkg, rel) {
 /** 旧版第三方 QQ 扩展（qq-better）的 `src/world.ts`。 */
 function qqWorldFile(appRoot) {
   return extensionFile(appRoot, QQ_PKG, ['src', 'world.ts']);
-}
-
-/** 新版第三方 QQ 扩展（qq-final）里的某个源文件。 */
-function qqFinalFile(appRoot, name) {
-  return extensionFile(appRoot, QQF_PKG, ['src', name]);
 }
 
 /** 把 `\n` 换成文件自己的换行，锚点才落得上。 */
@@ -203,123 +208,13 @@ function swapAll(text, from, to) {
 }
 
 // ---------------------------------------------------------------------------
-// 新版第三方 QQ 扩展（qq-final）：`[图片:…]` 只认图片库目录里的文件名 → 再认绝对/相对路径
+// 新版第三方 QQ 扩展（qq-final）：不打补丁了，改成算「标签怎么写」
 // ---------------------------------------------------------------------------
-
-/**
- * 插进 qq-final `src/normalize.ts` 的助手。
- *
- * 它的 `resolveImageFile()` 会把名字收敛在图片库目录（`imageDir`）里，绝对路径和 `..` 一律拒绝。
- * 图片工坊把图存在自己的数据目录，送过来的是绝对路径，于是只能「静默丢标记」——用户看到的是
- * 「发了但没图」。这里在**保留原图片库解析优先**的前提下加两个来源：绝对路径直接用；
- * 相对路径先按图片库目录、再按进程工作目录解析。仍然只认图片扩展名，避免被当成任意文件外传。
- */
-const QQF_RESOLVE_FN = [
-  '/** coopanion-chat-image: [图片:<路径>] 除了图片库文件名，还能用绝对路径或工作区相对路径。 */',
-  'function resolvePathImage(fname: string, imageDir: string): string | null {',
-  '  try {',
-  "    let p = String(fname || '').trim();",
-  '    if (!p || p.length > 1024) return null;',
-  '    if (/(^|[\\\\/])\\.\\.([\\\\/]|$)/.test(p)) return null;',
-  "    if (/^file:/i.test(p)) p = decodeURIComponent(p.replace(/^file:\\/\\/\\/?/i, ''));",
-  '    if (!/\\.(?:gif|png|jpe?g|webp|bmp)$/i.test(p)) return null;',
-  '    const abs = isAbsolute(p) || /^[a-zA-Z]:/.test(p);',
-  '    const bases = [];',
-  '    const add = (b) => {',
-  '      if (b && bases.indexOf(b) < 0) bases.push(b);',
-  '    };',
-  '    add(imageDir);',
-  '    add(process.cwd());',
-  '    if (!abs) {',
-  '      // coopanion 的工作区不在 cwd 正下方（实况是 <根>/data/home/companion/workspace），',
-  '      // 所以从 cwd 与图片库目录逐级往上找几层，把常见的几条工作区路径都当成基底。',
-  '      const starts = [process.cwd(), imageDir].filter(Boolean);',
-  '      for (const start of starts) {',
-  '        let dir = resolve(start);',
-  '        for (let i = 0; i < 6; i += 1) {',
-  '          add(dir);',
-  "          add(resolve(dir, 'workspace'));",
-  "          add(resolve(dir, 'blobs'));",
-  "          add(resolve(dir, 'data', 'home', 'companion', 'workspace'));",
-  "          const up = resolve(dir, '..');",
-  '          if (up === dir) break;',
-  '          dir = up;',
-  '        }',
-  '      }',
-  '    }',
-  '    for (const base of bases) {',
-  '      const candidate = abs ? resolve(p) : resolve(base, p);',
-  '      if (existsSync(candidate)) return candidate;',
-  '    }',
-  '    return null;',
-  '  } catch {',
-  '    return null;',
-  '  }',
-  '}',
-].join('\n');
-
-/** 认「助手是这一版」：v1（只按 cwd 找）与 v2（还往上找工作区）靠这句区分。 */
-const QQF_FN_MARK_V2 = "'data', 'home', 'companion', 'workspace'";
-
-/** 插在它后面（`buildOutgoing` 之前就定义好，函数声明提升也无所谓，但这样更好认）。 */
-const QQF_FN_ANCHOR = 'export const __resolveImageFileForTest = resolveImageFile;';
-
-/** `buildOutgoing()` 里处理 `[图片:…]` 的那一小段：原样 → 改写。 */
-const QQF_BRANCH_OLD = [
-  "      } else if (inner.startsWith('图片:')) {",
-  "        const fname = inner.slice('图片:'.length).trim();",
-  '        if (imageDir && fname) {',
-  '          const p = resolveImageFile(imageDir, fname);',
-  '          if (p && existsSync(p)) {',
-  '            const segment = imageSegment(p);',
-  '            if (segment) segments.push(segment);',
-  '          }',
-  '        }',
-  '        // 图片库文件不存在或越界时静默丢弃该标记，不读取任意本机文件。',
-].join('\n');
-
-const QQF_BRANCH_NEW = [
-  "      } else if (inner.startsWith('图片:')) {",
-  "        const fname = inner.slice('图片:'.length).trim();",
-  '        if (fname) {',
-  '          const p = (imageDir ? resolveImageFile(imageDir, fname) : null) || resolvePathImage(fname, imageDir);',
-  '          if (p) {',
-  '            const segment = imageSegment(p);',
-  '            if (segment) segments.push(segment);',
-  '          }',
-  '        }',
-  '        // 补丁:先认图片库文件名,再认绝对路径与工作区相对路径。',
-].join('\n');
-
-/** 「改写过没有」看这两处都在（少一处就是半成品，下次启动会补齐）。 */
-const QQF_BRANCH_MARK = '|| resolvePathImage(fname, imageDir);';
-
-/**
- * `[图片:…]` 的标签匹配行：上游写死「方括号内最多 40 个字符」，
- * 而一个 Windows 绝对路径（`[图片:G:\…\blobs\x.png]`）动辄 60–90 个字符——
- * 正则根本匹配不到，整句原样当文本发出去，看着就像补丁没生效。
- * 这里只把「表情包: / 图片:」这两种标签放宽到 900，其它 `[..]` 仍是 40。
- */
-const QQF_REGEX_OLD = String.raw`  const re = /\[([^\[\]]{1,40})\]|@([^\s@]{1,30})/g;`;
-const QQF_REGEX_NEW = String.raw`  const re = /\[((?:表情包|图片):[^\[\]\n]{1,900}|[^\[\]]{1,40})\]|@([^\s@]{1,30})/g;`;
-/** 认「标签行已经放宽过了」。 */
-const QQF_REGEX_MARK = String.raw`(?:表情包|图片):[^\[\]\n]{1,900}`;
-
-/**
- * qq-final `world.ts` 里那两处「[图片:文件名]」的说明（`qq_image` 的工具说明 + list 回执）。
- * 模型只看得到说明，不改就永远只写文件名、绕开补丁。
- */
-const QQF_HINTS = [
-  {
-    from: '发送图片时先 list，再在 qq_send 的正文里使用 [图片:文件名]。',
-    to: '发送图片时先 list，再在 qq_send 的正文里使用 [图片:文件名]；本机图片也可以直接写绝对路径或相对工作目录的路径。',
-  },
-  {
-    from: '发送时把真实文件名写成 [图片:文件名]。',
-    to: '发送时把真实文件名写成 [图片:文件名]；本机图片也可以写绝对路径或相对工作目录的路径，如 [图片:D:/pics/a.png]。',
-  },
-];
-
+//
+// 0.6.28 起它只发压缩后的 `dist/index.js`（维护版才有 `src/`），补丁没处可打；
+// 而它本身够用：正文里的 `[图片:名字]` 会在配置 `worlds.qqbot.imageDir`（默认扩展目录下的
+// `images/`）里解析，**子路径也认**（`blobs/x.jpg`），只拒绝绝对路径、`..` 和图片库之外的文件。
+// 所以这里不写文件，只读配置算出这张图该写成什么标签 —— 见下面的 `qqFinalShare()`。
 
 /**
  * 每个补丁：`file` 是绝对路径，`done` 说这段原文是不是已经改过了，
@@ -327,16 +222,11 @@ const QQF_HINTS = [
  */
 export function patchSpecs(appRoot) {
   const qq = qqWorldFile(appRoot);
-  const qqfNormalize = qqFinalFile(appRoot, 'normalize.ts');
-  const qqfWorld = qqFinalFile(appRoot, 'world.ts');
   const specs = [
     // 这两处落在第三方 QQ 扩展（qq-better）上：没装、或那个世界没开，就记 absent（不算失败）。
     // 官方 `cortico-world-qq` 发图按 blob 句柄，不解析本地路径，用不着补丁。
     { id: 'qq-image-relpaths', file: qq, what: 'QQ 发图/看图认工作区相对路径', optional: true, worldId: 'qqbot' },
     { id: 'qq-image-hints', file: qq, what: 'QQ 发图/看图的说明写明相对工作区', optional: true, worldId: 'qqbot' },
-    // 新版第三方扩展（qq-final 0.6.x）发图走正文标记 `[图片:文件名]`，只认图片库目录里的名字。
-    { id: 'qqf-image-paths', file: qqfNormalize, what: '新版 QQ 扩展的 [图片:…] 认绝对/相对路径', optional: true, worldId: 'qqbot' },
-    { id: 'qqf-image-hints', file: qqfWorld, what: '新版 QQ 扩展的发图说明写明可以写路径', optional: true, worldId: 'qqbot' },
   ];
   return specs;
 }
@@ -362,6 +252,66 @@ export function worldSwitch(appRoot, worldId) {
     }
   }
   return { known: false, enabled: true };
+}
+
+/** 宿主配置里的 QQ 世界那节（`worlds.qqbot`）；读不到返回 null。 */
+function qqbotConfig(appRoot) {
+  const files = [];
+  if (appRoot) files.push(join(dirname(dirname(resolve(appRoot))), 'data', 'home', 'companion', 'config.json'));
+  files.push(join(process.cwd(), 'data', 'home', 'companion', 'config.json'));
+  for (const file of files) {
+    try {
+      const world = JSON.parse(readFileSync(file, 'utf8'))?.worlds?.qqbot;
+      if (world && typeof world === 'object') return world;
+    } catch {
+      // 读不到就试下一个。
+    }
+  }
+  return null;
+}
+
+/**
+ * 新版 QQ 扩展（`cortico-world-qq-final` 0.6.x）怎么发本地图。
+ *
+ * 它从 0.6.28 起只发压缩后的 `dist/index.js`（维护版才有 `src/`），补丁没处可打；
+ * 但发图本身不靠补丁：正文里的 `[图片:名字]` 会在配置 `worlds.qqbot.imageDir`
+ * （默认扩展目录下的 `images/`，相对值按扩展目录解析）里解析，**子路径也认**（`blobs/x.jpg`），
+ * 只拒绝绝对路径、`..` 和图片库之外的文件（安全边界，故意的）。
+ *
+ * 所以这里不算「路径能不能写进去」，只算「按当前配置，这张图该写成什么标签」：
+ * 图在图片库里就给 `[图片:…]`，不在就说清该把哪个配置指过来。
+ */
+export function qqFinalShare(appRoot, imagePath = '') {
+  const dir = extensionDir(appRoot, QQF_PKG);
+  const out = { installed: Boolean(dir), version: '', imageDir: '', tag: '', why: '' };
+  if (!dir) {
+    out.why = '没装 cortico-world-qq-final';
+    return out;
+  }
+  try {
+    out.version = String(JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'))?.version ?? '');
+  } catch {
+    out.version = '';
+  }
+  const raw = String(qqbotConfig(appRoot)?.imageDir ?? '').trim();
+  out.imageDir = raw ? (isAbsolute(raw) ? raw : resolve(dir, raw)) : resolve(dir, 'images');
+  if (!imagePath) return out;
+  const rel = relative(out.imageDir, resolve(imagePath));
+  if (!rel || rel.startsWith('..') || isAbsolute(rel)) {
+    out.why = `图片不在图片库目录里（${out.imageDir}）`;
+    return out;
+  }
+  out.tag = `[图片:${rel.split(sep).join('/')}]`;
+  return out;
+}
+
+/** 两个目录是不是同一个（Windows 不分大小写，末尾斜杠也不算差别）。 */
+export function samePath(a, b) {
+  const norm = (p) => {
+    const s = resolve(String(p ?? ''));
+    return process.platform === 'win32' ? s.toLowerCase() : s;
+  };
+  return Boolean(a) && Boolean(b) && norm(a) === norm(b);
 }
 
 /** 一处补丁的改写规则（拆出来是为了能在副本上单测）。 */
@@ -419,68 +369,6 @@ export function rulesFor(id) {
             }
           }
           if (recognized === 0) return { error: `工具说明已大改，一句都认不出来：${[].concat(QQ_HINTS[0].from)[0].slice(0, 40)}` };
-          return { text: work };
-        },
-      };
-    // 新版第三方扩展（qq-final）：`[图片:…]` 先按图片库认，再认绝对/相对路径。
-    case 'qqf-image-paths':
-      return {
-        // 助手在（而且是我们这一版） + 那段解析确实换成调用它了 + 标签行放宽了，才算打过。
-        done: (text) =>
-          text.includes('function resolvePathImage(') &&
-          text.includes(QQF_FN_MARK_V2) &&
-          text.includes(QQF_BRANCH_MARK) &&
-          text.includes(QQF_REGEX_MARK),
-        apply: (text) => {
-          let work = text;
-          if (!work.includes('function resolvePathImage(')) {
-            const withFn = swap(work, QQF_FN_ANCHOR, `${QQF_FN_ANCHOR}\n\n${asWritten(QQF_RESOLVE_FN, nl(work))}`);
-            if (withFn === null) return { error: `没找到图片名解析的锚点：${QQF_FN_ANCHOR}` };
-            work = withFn;
-          } else if (!work.includes(QQF_FN_MARK_V2)) {
-            // 0.5.8：老版助手只按图片库目录和 cwd 找，coopanion 的工作区在 data/home/companion/workspace，
-            // 相对路径永远找不到 → 整段换成会往上找工作区的那一版。
-            const EOL = nl(work);
-            const at = work.indexOf('function resolvePathImage(');
-            const commentAt = work.lastIndexOf('/** coopanion-chat-image', at);
-            const start = commentAt >= 0 ? commentAt : at;
-            const stop = work.indexOf(`${EOL}}${EOL}`, at);
-            if (at < 0 || stop < 0) return { error: '老版 resolvePathImage() 的结构认不出来，没法整段替换' };
-            work = `${work.slice(0, start)}${asWritten(QQF_RESOLVE_FN, EOL)}${work.slice(stop + 1 + EOL.length)}`;
-          }
-          if (!work.includes(QQF_BRANCH_MARK)) {
-            const branch = swap(work, asWritten(QQF_BRANCH_OLD, nl(work)), asWritten(QQF_BRANCH_NEW, nl(work)));
-            if (branch === null) {
-              return { error: `没找到 [图片:…] 那段解析（新版 QQ 扩展版本变了）：${QQF_BRANCH_OLD.split('\n')[0].trim()}` };
-            }
-            work = branch;
-          }
-          // 0.5.7：标签内最多 40 字的上游限制会让长路径整条当文本发出去，一并放宽。
-          if (work.includes(QQF_REGEX_MARK)) return { text: work };
-          const widened = swap(work, asWritten(QQF_REGEX_OLD, nl(work)), asWritten(QQF_REGEX_NEW, nl(work)));
-          if (widened === null) return { error: `没找到 [..] 标签的匹配行：${QQF_REGEX_OLD.trim()}` };
-          return { text: widened };
-        },
-      };
-    // 说明两处：`qq_image` 的工具说明 + list 回执里那句提示。
-    case 'qqf-image-hints':
-      return {
-        done: (text) => QQF_HINTS.every((h) => text.includes(h.to)),
-        apply: (text) => {
-          let work = text;
-          let recognized = 0;
-          for (const h of QQF_HINTS) {
-            if (work.includes(h.to)) {
-              recognized += 1;
-              continue;
-            }
-            const out = swapAll(work, h.from, h.to);
-            if (out !== null) {
-              work = out;
-              recognized += 1;
-            }
-          }
-          if (recognized === 0) return { error: `新版 QQ 扩展的发图说明已大改，一句都认不出来：${QQF_HINTS[1].from}` };
           return { text: work };
         },
       };

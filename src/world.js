@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 
 import { ImageApiError, editImage, generateImage, normalizeCloudSize } from './api.js';
 import { ChainError, chainSnapshot, entryLabel, entryState, parseChainEntries, runChain } from './chain.js';
-import { applyChatImagePatches, consolePort, patchBackupStatus, requestConsoleRestart, resolveAppRoot, restoreChatImagePatches } from './chat-image-patch.js';
+import { applyChatImagePatches, consolePort, patchBackupStatus, qqFinalShare, requestConsoleRestart, resolveAppRoot, restoreChatImagePatches, samePath } from './chat-image-patch.js';
 import { comfyDraw, comfyEdit, listModels, probe as probeComfy } from './comfyui.js';
 import { DEFAULTS, ID, configGroup, text } from './config.js';
 import { Gallery } from './gallery.js';
@@ -69,12 +69,12 @@ let PATCH_STATE = {
   restartPending: false,
   /** 这次启动从桌宠包里还原掉的旧补丁文件（0.3.0 起才有）。 */
   reverted: [],
-  /** 新版 QQ 扩展（qq-final）那两处补丁这次在不在：在才敢在回执里教模型直接写图片路径。 */
-  qqFinal: false,
   error: '',
   restart: null,
   /** 手动还原的记录：`{at, restored:[id], failed:[id], byFile:[{file,backup,state}]}`，没还原过就是 null。 */
   restored: null,
+  /** 新版 QQ 扩展（qq-final）的「图片库目录」信息：`{version, imageDir}`，没装就是 null。 */
+  qqFinal: null,
 };
 
 /** 重新对一遍补丁，并把结果收进 `PATCH_STATE`。 */
@@ -97,7 +97,17 @@ function refreshPatchState({ stateDir, log } = {}) {
     stuck: report.stuck,
     restartPending: report.restartPending,
     reverted: report.reverted?.filter((r) => r.reverted).map((r) => r.file) ?? [],
-    qqFinal: report.results.some((r) => r.id === 'qqf-image-paths' && (r.state === 'patched' || r.state === 'done')),
+    qqFinal: (() => {
+      // 新版 QQ 扩展不长路径，只在自己的「图片库目录」里按文件名找图 —— 状态页把这件事讲清楚。
+      try {
+        const appRootNow = report.appRoot ?? appRoot;
+        if (!appRootNow) return null;
+        const q = qqFinalShare(appRootNow);
+        return q.installed ? { version: q.version, imageDir: q.imageDir } : null;
+      } catch {
+        return null;
+      }
+    })(),
     error: report.error ?? '',
     restored: report.patched.length ? null : PATCH_STATE.restored,
   };
@@ -626,10 +636,18 @@ export class ImageWorld {
     if (spec.note) lines.push(`名字：${spec.note}`);
     if (spec.prompt) lines.push(`画面：${spec.prompt}`);
     if (spec.warning) lines.push(spec.warning);
+    // 新版 QQ 扩展（qq-final）不长路径：它只在「图片库目录」里按文件名找图。图正好在那个目录里
+    // 就把标签算出来给模型抄；不在就明说该把哪个配置指过来（补丁没处可打了，0.6.28 起只发 dist）。
+    const qq = qqFinalShare(PATCH_STATE.appRoot || resolveAppRoot([PACKAGE_DIR, process.cwd()]), spec.item?.path ?? '');
+    const qqLine = qq.installed
+      ? (qq.tag
+        ? `；新版 QQ 扩展（cortico-world-qq-final）直接在 \`qq_send\` 正文里写 ${qq.tag}`
+        : `；新版 QQ 扩展（cortico-world-qq-final）只发图片库目录里的图（现在是 ${qq.imageDir}），这张不在其中——把它的「图片库目录」指到 ${this.dir()}，就能用 \`[图片:文件名]\` 发`)
+      : '';
     lines.push(
       '图已进入本次对话，也显示在「图片工坊」页。要发给某人或某个群，就把上面那行 `[blob …]` 的句柄交给那个世界的发图工具'
       + '（官方 QQ 扩展是 `qq_draft` 的 `image`；旧版 QQ 扩展是 `qq_send_image`，填文件绝对路径'
-      + (PATCH_STATE.qqFinal ? '；新版 QQ 扩展（qq-final）在 `qq_send` 的正文里写 `[图片:文件绝对路径]`' : '')
+      + qqLine
       + '）。',
     );
     return {
@@ -779,6 +797,10 @@ export class ImageWorld {
       patch: {
         ...PATCH_STATE,
         packageDir: PACKAGE_DIR,
+        // 状态页顺带把「新版 QQ 扩展认哪个目录」写出来：它就是图片能不能直接发出去的关键。
+        qqFinal: PATCH_STATE.qqFinal
+          ? { ...PATCH_STATE.qqFinal, sameDir: samePath(PATCH_STATE.qqFinal.imageDir, this.dir()) }
+          : null,
         backups: patchBackupStatus(PATCH_STATE.appRoot || resolveAppRoot([PACKAGE_DIR, process.cwd()])),
       },
     };
@@ -909,7 +931,6 @@ export class ImageWorld {
       stuck: false,
       restartPending: false,
       error: res.error ?? '',
-      qqFinal: false,
       restored: {
         at,
         restored: res.restored,

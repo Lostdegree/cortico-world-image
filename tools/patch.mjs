@@ -8,8 +8,10 @@
  *   node tools/patch.mjs --backups    看每处补丁与它的 .coopanion-orig 备份
  *   node tools/patch.mjs --restore    按备份还原（撤销补丁；可逆，之后能再打）
  *
- * 0.3.0 起只改第三方 QQ 扩展的源码（旧版 `qq-better` 的 `src/world.ts` 两处，
- * 新版 `qq-final` 的 `src/normalize.ts` + `src/world.ts` 各一处），桌宠包一个字节都不动：
+ * 0.3.0 起只改第三方 QQ 扩展的源码：旧版 `qq-better` 的 `src/world.ts` 两处（认绝对路径与工作区相对路径）。
+ * 新版 `qq-final` 从 0.6.28 起只发压缩后的 `dist/index.js`，没有 `src/` 可改 —— 0.6.0 起不再给它打补丁：
+ * 它本来就只按「图片库目录」（`worlds.qqbot.imageDir`）里的文件名找图，本扩展的 `qqFinalShare()`
+ * 会把标签算好交给模型（详见 README「为什么顺手改了 QQ 扩展」）。桌宠包一个字节都不动：
  * 贴图改用官方的 `pet_say.images`。早先版本打进桌宠包的旧补丁，会在每次启动时按备份还原。
  *
  * 补丁会在每次启动时自动检查/重打（程序自动更新覆写后自愈）；
@@ -90,50 +92,14 @@ const QQ_FIXTURE = [
   '',
 ].join('\n');
 
-/** 新版 QQ 扩展（qq-final 0.6.32）`src/normalize.ts` 里我们认得的那些行。 */
-const QQF_NORMALIZE_FIXTURE = [
-  "export function resolveImageFile(imageDir: string, name: string): string | null {",
-  '  return name ? imageDir : null;',
-  '}',
-  '',
-  'export const __resolveImageFileForTest = resolveImageFile;',
-  '',
-  'export function buildOutgoing(inner: string, imageDir: string, segments: unknown[]): void {',
-  "  if (inner.startsWith('文本:')) {",
-  '    segments.push(inner);',
-  "  const re = /\\[([^\\[\\]]{1,40})\\]|@([^\\s@]{1,30})/g;",
-  "      } else if (inner.startsWith('图片:')) {",
-  "        const fname = inner.slice('图片:'.length).trim();",
-  '        if (imageDir && fname) {',
-  '          const p = resolveImageFile(imageDir, fname);',
-  '          if (p && existsSync(p)) {',
-  '            const segment = imageSegment(p);',
-  '            if (segment) segments.push(segment);',
-  '          }',
-  '        }',
-  '        // 图片库文件不存在或越界时静默丢弃该标记，不读取任意本机文件。',
-  '  }',
-  '}',
-  '',
-].join('\n');
-
-/** 新版 QQ 扩展 `src/world.ts` 里那两句发图说明（`qq_image` 说明 + list 回执）。 */
-const QQF_WORLD_FIXTURE = [
-  'export const QQ_IMAGE_HINT = [',
-  "  '发送图片时先 list，再在 qq_send 的正文里使用 [图片:文件名]。',",
-  "].join('');",
-  '',
-  'export const QQ_LIST_HINT = [',
-  "  '发送时把真实文件名写成 [图片:文件名]。',",
-  "].join('');",
-  '',
-].join('\n');
-
 /**
- * 临时搭一份「像 resources/app」的目录：框架标记 + 桌宠包 + 假 QQ 扩展（旧版两处、新版两处）。
+ * 临时搭一份「像 resources/app」的目录：框架标记 + 桌宠包 + 假 QQ 扩展（旧版两处补丁的目标文件）。
  * 传 `null` 表示「没装这个扩展」。
+ *
+ * 新版 qq-final 不再放 fixtures：它 0.6.28 起只发 `dist/index.js`，没有 `src/` 可改，
+ * 本扩展也不再给它打补丁（`qqFinalShare()` 只读配置算标签，见 tools/check.mjs）。
  */
-function makeFakeApp(root, { qqText = QQ_FIXTURE, qqfNormalizeText = QQF_NORMALIZE_FIXTURE, qqfWorldText = QQF_WORLD_FIXTURE } = {}) {
+function makeFakeApp(root, { qqText = QQ_FIXTURE } = {}) {
   const app = join(root, 'resources', 'app');
   mkdirSync(join(app, 'build', 'cortico', 'src'), { recursive: true });
   writeFileSync(join(app, 'build', 'cortico', 'src', 'paths.ts'), 'export {};\n');
@@ -144,13 +110,7 @@ function makeFakeApp(root, { qqText = QQ_FIXTURE, qqfNormalizeText = QQF_NORMALI
   mkdirSync(qqDir, { recursive: true });
   const qq = join(qqDir, 'world.ts');
   if (qqText !== null) writeFileSync(qq, qqText);
-  const qqfDir = join(app, 'data', 'extensions', 'node_modules', QQF_PKG, 'src');
-  mkdirSync(qqfDir, { recursive: true });
-  const qqfNormalize = join(qqfDir, 'normalize.ts');
-  const qqfWorld = join(qqfDir, 'world.ts');
-  if (qqfNormalizeText !== null) writeFileSync(qqfNormalize, qqfNormalizeText);
-  if (qqfWorldText !== null) writeFileSync(qqfWorld, qqfWorldText);
-  return { app, petDir, qq, qqfNormalize, qqfWorld };
+  return { app, petDir, qq };
 }
 
 /** 让副本里也能有宿主配置（`worlds.<id>.enabled`）——补丁只为开着的世界打。 */
@@ -166,15 +126,12 @@ function selfTest() {
     head('补丁清单');
     const specs = patchSpecs(join(work, 'resources', 'app'));
     const ids = specs.map((s) => s.id);
-    ok(specs.length === 4, '一共 4 处补丁（桌宠包上不再打补丁）', String(specs.length));
-    ok(['qq-image-relpaths', 'qq-image-hints', 'qqf-image-paths', 'qqf-image-hints'].every((id) => ids.includes(id)), '四个补丁 id 齐全', ids.join(','));
-    ok(specs.every((s) => s.optional === true), '四处都是可选补丁（没装 QQ 扩展不算失败）');
-    const oldSide = specs.filter((s) => s.id.startsWith('qq-'));
-    const newSide = specs.filter((s) => s.id.startsWith('qqf-'));
-    ok(oldSide.every((s) => s.file.includes(QQ_PKG) && s.file.endsWith('world.ts')), '旧版那两处落在 qq-better 的 src/world.ts', JSON.stringify(oldSide.map((s) => s.file)));
-    ok(newSide.every((s) => s.file.includes(QQF_PKG)), '新版那两处落在 qq-final 的 src/', JSON.stringify(newSide.map((s) => s.file)));
-    ok(newSide.some((s) => s.file.endsWith('normalize.ts')) && newSide.some((s) => s.file.endsWith('world.ts')), '新版分别改 normalize.ts 与 world.ts');
-    ok(specs.every((s) => s.worldId === 'qqbot'), '四处都挂在 world「qqbot」上（切到官方 QQ 扩展后自动跳过）', JSON.stringify(specs.map((s) => s.worldId)));
+    ok(specs.length === 2, '一共 2 处补丁（桌宠包与 qq-final 都不再打补丁）', String(specs.length));
+    ok(['qq-image-relpaths', 'qq-image-hints'].every((id) => ids.includes(id)), '两个补丁 id 齐全', ids.join(','));
+    ok(!ids.some((id) => id.startsWith('qqf-')), 'qq-final 的补丁已经没了（它 0.6.28 起只发 dist）', ids.join(','));
+    ok(specs.every((s) => s.optional === true), '两处都是可选补丁（没装 QQ 扩展不算失败）');
+    ok(specs.every((s) => s.file.includes(QQ_PKG) && s.file.endsWith('world.ts')), '两处都落在 qq-better 的 src/world.ts', JSON.stringify(specs.map((s) => s.file)));
+    ok(specs.every((s) => s.worldId === 'qqbot'), '两处都挂在 world「qqbot」上（切到官方 QQ 扩展后自动跳过）', JSON.stringify(specs.map((s) => s.worldId)));
     ok(specs.every((s) => typeof s.what === 'string' && s.what.length > 4), '每处都有说明');
 
     head('改写规则（单文件）');
@@ -203,66 +160,41 @@ function selfTest() {
     const partial = hints.apply(reworded);
     ok(!partial?.error && (partial?.text ?? '').includes('给了就不再翻缓冲。'), '上游换掉一句时只跳过那一处，不算失败', partial?.error ?? '');
 
-    head('改写规则（新版 qq-final）');
-    const qqfPaths = rulesFor('qqf-image-paths');
-    ok(typeof qqfPaths?.done === 'function' && typeof qqfPaths?.apply === 'function', 'qqf-image-paths 有 done/apply');
-    ok(Boolean(qqfPaths.apply('export const nope = 1;\n')?.error), '认不出原文时报失败，不瞎改');
-    const qqfPathsOut = qqfPaths.apply(QQF_NORMALIZE_FIXTURE);
-    ok(!qqfPathsOut?.error, 'qq-final 的原文能改出来', qqfPathsOut?.error ?? '');
-    ok((qqfPathsOut?.text ?? '').includes('function resolvePathImage(fname: string, imageDir: string): string | null {'), '插进了认绝对/相对路径的助手');
-    ok((qqfPathsOut?.text ?? '').includes('|| resolvePathImage(fname, imageDir);'), '[图片:…] 那段先认图片库、再认路径');
-    ok((qqfPathsOut?.text ?? '').includes(String.raw`(?:表情包|图片):[^\[\]\n]{1,900}`), '标签行放宽到 900 字（70 字的绝对路径才认）');
-    ok(qqfPaths.done(qqfPathsOut?.text ?? ''), '改完认成「已打过」（幂等）');
-    ok(qqfPaths.apply(qqfPathsOut?.text ?? '').text === qqfPathsOut?.text, '再打一次一个字都不动');
-
-    const qqfHints = rulesFor('qqf-image-hints');
-    ok(typeof qqfHints?.done === 'function' && typeof qqfHints?.apply === 'function', 'qqf-image-hints 有 done/apply');
-    ok(Boolean(qqfHints.apply('export const nope = 1;\n')?.error), '两句都认不出来时报失败');
-    const qqfHintsOut = qqfHints.apply(QQF_WORLD_FIXTURE);
-    ok(!qqfHintsOut?.error, 'qq-final 的两句说明都能改出来', qqfHintsOut?.error ?? '');
-    ok((qqfHintsOut?.text ?? '').includes('本机图片也可以直接写绝对路径或相对工作目录的路径。'), 'qq_image 的工具说明写明可以写路径');
-    ok((qqfHintsOut?.text ?? '').includes('如 [图片:D:/pics/a.png]。'), 'list 回执的说明同步');
-    ok(qqfHints.done(qqfHintsOut?.text ?? ''), '改完认成「已打过」（幂等）');
-
     head('落盘 / 备份 / 还原（副本）');
     const a1 = makeFakeApp(join(work, 'run1'));
     const first = applyChatImagePatches(a1.app, { stateDir: join(work, 'state1') });
-    ok(first.patched.length === 4, '四处都打上了（文件形式）', JSON.stringify(first.results.map((r) => `${r.id}:${r.state}`)));
+    ok(first.patched.length === 2, '两处都打上了（文件形式）', JSON.stringify(first.results.map((r) => `${r.id}:${r.state}`)));
     ok(first.failed.length === 0, '没有失败项', first.failed.join(','));
     const onDisk = readFileSync(a1.qq, 'utf8');
     ok(onDisk.includes('resolveLocalImagePath(image, this.config.memoryDir'), '磁盘上那份真的改了');
     ok(existsSync(`${a1.qq}.coopanion-orig`) && readFileSync(`${a1.qq}.coopanion-orig`, 'utf8') === QQ_FIXTURE, '改写前留了原文备份（.coopanion-orig）');
-    ok(readFileSync(a1.qqfNormalize, 'utf8').includes('function resolvePathImage('), 'qq-final 的 normalize.ts 也改了');
-    ok(readFileSync(`${a1.qqfNormalize}.coopanion-orig`, 'utf8') === QQF_NORMALIZE_FIXTURE, 'qq-final 也留了原文备份');
     ok(first.restartPending === true, '第一次改过文件 → 请求重启');
 
     const second = applyChatImagePatches(a1.app, { stateDir: join(work, 'state1') });
     ok(second.patched.length === 0 && second.failed.length === 0, '再跑一遍是幂等的（0 改动、0 失败）', JSON.stringify({ patched: second.patched, failed: second.failed }));
-    ok(second.results.every((r) => r.state === 'done'), '四处都记 done', JSON.stringify(second.results.map((r) => r.state)));
+    ok(second.results.every((r) => r.state === 'done'), '两处都记 done', JSON.stringify(second.results.map((r) => r.state)));
     ok(second.restartPending === false, '没改东西就不请求重启');
 
     const rows = patchBackupStatus(a1.app);
-    ok(rows.length === 4 && rows.every((r) => r.patched && r.hasBackup && !r.same), '备份状态：四处都「已打 + 有备份 + 与当前不同」', JSON.stringify(rows.map((r) => `${r.id}:${r.patched}/${r.hasBackup}/${r.same}`)));
+    ok(rows.length === 2 && rows.every((r) => r.patched && r.hasBackup && !r.same), '备份状态：两处都「已打 + 有备份 + 与当前不同」', JSON.stringify(rows.map((r) => `${r.id}:${r.patched}/${r.hasBackup}/${r.same}`)));
 
     const back = restoreChatImagePatches(a1.app, { stateDir: join(work, 'state1') });
-    ok(back.restored.length === 3 && !back.failed.length, '按备份还原了 3 个文件', JSON.stringify({ restored: back.restored, failed: back.failed }));
+    ok(back.restored.length === 1 && !back.failed.length, '按备份还原了 1 个文件（两处补丁都在同一个文件里）', JSON.stringify({ restored: back.restored, failed: back.failed }));
     ok(readFileSync(a1.qq, 'utf8') === QQ_FIXTURE, '还原后与原文逐字节一致');
     const reapply = applyChatImagePatches(a1.app, { stateDir: join(work, 'state1') });
-    ok(reapply.patched.length === 4, '还原之后还能再打回去（可逆）', JSON.stringify(reapply.patched));
+    ok(reapply.patched.length === 2, '还原之后还能再打回去（可逆）', JSON.stringify(reapply.patched));
 
     head('没装 / 改坏了 QQ 扩展');
-    const a2 = makeFakeApp(join(work, 'run2'), { qqText: null, qqfNormalizeText: null, qqfWorldText: null });
+    const a2 = makeFakeApp(join(work, 'run2'), { qqText: null });
     const noQq = applyChatImagePatches(a2.app, { stateDir: join(work, 'state2') });
     ok(noQq.failed.length === 0 && noQq.results.every((r) => r.state === 'absent'), '没装 QQ 扩展时两处记 absent、不算失败', JSON.stringify(noQq.results.map((r) => `${r.id}:${r.state}`)));
     ok(!noQq.restartPending, '没装 QQ 扩展时不请求重启');
 
     const a3 = makeFakeApp(join(work, 'run3'), {
       qqText: 'export class QQWorld { /* 上游大改 */ }\n',
-      qqfNormalizeText: 'export class Normalize { /* 上游大改 */ }\n',
-      qqfWorldText: 'export class QQFWorld { /* 上游大改 */ }\n',
     });
     const broken = applyChatImagePatches(a3.app, { stateDir: join(work, 'state3') });
-    ok(broken.failed.length === 4, '认不出原文时四处都记失败', JSON.stringify(broken.results.map((r) => `${r.id}:${r.state}`)));
+    ok(broken.failed.length === 2, '认不出原文时两处都记失败', JSON.stringify(broken.results.map((r) => `${r.id}:${r.state}`)));
     ok(readFileSync(a3.qq, 'utf8') === 'export class QQWorld { /* 上游大改 */ }\n', '认不出就不动那个文件');
     ok(existsSync(`${a3.qq}.coopanion-orig`) === false, '没改成也就不会留备份');
 
@@ -283,7 +215,7 @@ function selfTest() {
     const a5 = makeFakeApp(join(work, 'run5'));
     writeWorldSwitch(a5.app, { qqbot: { enabled: false }, qq: { enabled: true } });
     const off = applyChatImagePatches(a5.app, { stateDir: join(work, 'state5') });
-    ok(off.results.length === 4 && off.results.every((r) => r.state === 'absent'), 'qqbot 关掉时四处都记 absent', JSON.stringify(off.results.map((r) => `${r.id}:${r.state}`)));
+    ok(off.results.length === 2 && off.results.every((r) => r.state === 'absent'), 'qqbot 关掉时两处都记 absent', JSON.stringify(off.results.map((r) => `${r.id}:${r.state}`)));
     ok(off.results.every((r) => /worlds\.qqbot\.enabled=false/.test(r.error ?? '')), 'absent 里写明是「世界没开」', JSON.stringify(off.results.map((r) => r.error)));
     ok(!readFileSync(a5.qq, 'utf8').includes('resolveLocalImagePath'), '文件一个字节都没动');
     ok(!existsSync(`${a5.qq}.coopanion-orig`), '也不会平白留一份备份');
@@ -293,8 +225,8 @@ function selfTest() {
     const a6 = makeFakeApp(join(work, 'run6'));
     writeWorldSwitch(a6.app, { qqbot: { enabled: true } });
     const on = applyChatImagePatches(a6.app, { stateDir: join(work, 'state6') });
-    ok(on.patched.length === 4, 'qqbot 开着时照常打上', JSON.stringify(on.results.map((r) => `${r.id}:${r.state}`)));
-    ok(patchBackupStatus(a6.app).length === 4, '开着时备份状态四行');
+    ok(on.patched.length === 2, 'qqbot 开着时照常打上', JSON.stringify(on.results.map((r) => `${r.id}:${r.state}`)));
+    ok(patchBackupStatus(a6.app).length === 2, '开着时备份状态两行');
 
     head('控制台端口');
     const cfgApp = join(work, 'port');
