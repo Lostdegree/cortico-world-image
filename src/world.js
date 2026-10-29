@@ -9,7 +9,7 @@
  */
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import { extname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -142,8 +142,8 @@ export class ImageWorld {
   /**
    * 密钥只在内存里过一手，不写 config.json。
    *
-   * 先问部署 .env（`ctx.secret`），再退到同级 `providers/<端点>/.env`：
-   * 机器上往往已经为画图建过一个端点，密钥名直接填那个就行，不必抄第二份。
+   * 只问部署自己的密钥库（`ctx.secret`）：别的扩展目录里的 `.env` 一概不去翻 ——
+   * 扩展之间不共享密钥文件，谁家的密钥谁家管。
    */
   #keyLookup(name = this.#str('apiKeySecret')) {
     if (!name) return { name, value: '', from: '', provider: '' };
@@ -153,36 +153,13 @@ export class ImageWorld {
     } catch {
       own = '';
     }
-    if (own) return { name, value: own, from: 'bot', provider: '' };
-    const found = this.#keyFromProviders(name);
-    return {
-      name,
-      value: found.value,
-      from: found.value ? 'provider' : '',
-      provider: found.provider,
-    };
+    return { name, value: own, from: own ? 'bot' : '', provider: '' };
   }
 
   /** 某一档要的密钥：先看这一档的 `apiKeySecret`，没写就用全局那个。 */
   #entryKey(entry) {
     const name = String(entry?.apiKeySecret ?? '').trim() || this.#str('apiKeySecret');
     return name ? this.#keyLookup(name).value : '';
-  }
-
-  /** 扫 `<botDir>/../providers/<端点>/.env`，找同名变量。 */
-  #keyFromProviders(name) {
-    const root = resolve(this.botDir, '..', 'providers');
-    const pattern = new RegExp(`^\\s*${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*=\\s*(\\S+)`, 'm');
-    try {
-      for (const entry of readdirSync(root, { withFileTypes: true })) {
-        if (!entry.isDirectory()) continue;
-        const hit = pattern.exec(readFileSync(join(root, entry.name, '.env'), 'utf8'));
-        if (hit) return { value: hit[1], provider: entry.name };
-      }
-    } catch {
-      // 没有 providers 目录、或某个端点没有 .env：当作没找到。
-    }
-    return { value: '', provider: '' };
   }
 
   apiKey() {
@@ -205,7 +182,6 @@ export class ImageWorld {
       name: key.name,
       keySet: Boolean(key.value),
       keyFrom: key.from,
-      keyProvider: key.provider,
       baseUrl: '',
       model: '',
       chain: [],
@@ -695,7 +671,6 @@ export class ImageWorld {
       keyName: env.name,
       keySet: env.keySet,
       keyFrom: env.keyFrom,
-      keyProvider: env.keyProvider,
       detail: env.detail,
       models: this.#raw('models'),
       chain: env.chain,

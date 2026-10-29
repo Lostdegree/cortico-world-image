@@ -146,7 +146,6 @@ const ZH = {
   keyState: '密钥',
   keyFrom: '密钥来源',
   fromBot: '部署 .env',
-  fromProvider: '端点 .env',
   setLabel: '已填',
   unsetLabel: '未填',
   indexFile: '索引文件',
@@ -269,7 +268,6 @@ const EN = {
   keyState: 'API key',
   keyFrom: 'Key source',
   fromBot: 'deployment .env',
-  fromProvider: 'endpoint .env',
   setLabel: 'set',
   unsetLabel: 'missing',
   indexFile: 'Index file',
@@ -1104,11 +1102,7 @@ function statusPanel(ctx) {
       { k: tx.keyName, v: ctx.ui.h('span', 'mono', s?.keyName || '') },
       {
         k: tx.keyFrom,
-        v: s?.keyFrom === 'bot'
-          ? tx.fromBot
-          : s?.keyFrom === 'provider'
-            ? tx.fromProvider + (s?.keyProvider ? ` · ${s.keyProvider}` : '')
-            : tx.none,
+        v: s?.keyFrom === 'bot' ? tx.fromBot : tx.none,
       },
       { k: tx.dir, v: ctx.ui.h('span', 'mono', currentDir) },
       { k: tx.indexFile, v: ctx.ui.h('span', 'mono', s?.indexFile || '') },
