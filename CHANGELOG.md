@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.1
+
+- 「保存目录」的说明只留一种做法：要用 `cortico-world-qq-final` 0.6.36+ 发图，就把本扩展保存目录的绝对路径填进 QQ 插件配置的 `worlds.qqbot.imageDir`。去掉「旧版 0.6.35 及更早可以改用补丁台的发图认路径补丁」那半句（补丁台的事在补丁台面板里说，不在本扩展的设置里交叉引用）。
+
 ## 0.7.0
 
 - **补丁整体搬到「补丁台」**：`src/chat-image-patch.js`、`tools/patch.mjs`、状态页的补丁卡片、`COOPANION_CHAT_IMAGE_PATCH` 开关全部移除。本扩展从此**不写任何别人的文件**，启动时只挂工具。那 4 处 QQ 发图补丁（旧版 `cortico-world-qq-better-alont1` 两处 + `cortico-world-qq-final` ≤0.6.35 两处）连同备份、还原、自动重打，都改由 `cortico-world-patchkit`（0.2.0）负责，卡片和开关在那里。
