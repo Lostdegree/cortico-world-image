@@ -5,13 +5,13 @@
  *   package.json 必填字段、npm 包名与版本号、`type: module`、
  *   `cortico` 声明按宿主 `src/extensions/manifest.ts` 的规则复刻校验、
  *   关键词、入口文件存在、`files` 覆盖到入口与面板产物、`cortico.describe` 指向的自描述在包里且是合法 JSON、
- *   发布物里没有 `*.coopanion-orig` / `.chat-image-patch.json` / 本机路径、
+ *   发布物里没有 `*.coopanion-orig` / `.patchkit-state.json` / 本机路径、
  *   每个要发布的 `.js`/`.mjs` 过一遍 `node --check`。
  *
- * 宿主相关的三套测试只在找得到**契约版本对得上**的本机 Coopanion 安装时才跑（0.1 的安装没有
+ * 宿主相关的两套测试只在找得到**契约版本对得上**的本机 Coopanion 安装时才跑（0.1 的安装没有
  * `describe-export.ts`、契约号也更低：自动发现到这种旧安装时只提醒并跳过，不算失败；
  * 显式 `--app`/`COOPANION_APP_ROOT` 指到不支持的宿主才算失败）：
- *   `tools/check.mjs`（离线，永远跑）、`tools/patch.mjs`（补丁自测）、
+ *   `tools/check.mjs`（离线，永远跑）、
  *   `tools/drymount.mts`（用框架自己的判据真跑装配检查）、
  *   `tools/describe.mts --check`（核对 describe.json 与代码里的自描述一致）。
  *
@@ -22,7 +22,7 @@
  *   node tools/prepublish.mjs --quiet-host                        # 找不到宿主不算提醒
  * 退出码：0 = 可以发；1 = 有失败项；2 = 用法/环境问题。
  */
-import { existsSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -224,7 +224,7 @@ for (const need of mustShip) {
 }
 if (!mustShip.some((need) => !shippedRel.includes(need))) ok('入口、面板产物与自描述都在 files 里');
 
-for (const pattern of [/\.coopanion-orig$/, /\.chat-image-patch\.json$/, /\.env$/i, /\.log$/i]) {
+for (const pattern of [/\.coopanion-orig$/, /\.patchkit-state\.json$/, /\.env$/i, /\.log$/i]) {
   const hits = shippedRel.filter((file) => pattern.test(file));
   for (const hit of hits) bad(`发布物里不该有 ${hit}`);
 }
@@ -260,8 +260,6 @@ ok(`${checked} 个 .js/.mjs 过了 node --check`);
 
 /* ---------- 宿主相关：先离线那份，再跑要安装的那两份 ---------- */
 
-const stateFile = join(pkgDir, '.chat-image-patch.json');
-const hadStateFile = existsSync(stateFile);
 
 function runSuite(title, args, env) {
   section(title);
@@ -320,21 +318,15 @@ const skipReason = (() => {
 })();
 
 if (flag('only-static')) {
-  hint('--only-static：跳过补丁自测、dry-mount 与自描述核对');
+  hint('--only-static：跳过 dry-mount 与自描述核对');
 } else if (skipReason) {
   if (explicitApp) bad(skipReason);
-  else if (flag('quiet-host')) console.log(`宿主相关三项跳过：${skipReason}`);
-  else hint(`${skipReason}：跳过补丁自测、dry-mount 与自描述核对`);
+  else if (flag('quiet-host')) console.log(`宿主相关两项跳过：${skipReason}`);
+  else hint(`${skipReason}：跳过 dry-mount 与自描述核对`);
 } else {
   console.log(`\n宿主：${appRoot}`);
-  runSuite('补丁自测（tools/patch.mjs）', [join('tools', 'patch.mjs'), '--app', appRoot], { COOPANION_APP_ROOT: appRoot });
   runSuite('dry-mount（tools/drymount.mts）', ['--experimental-transform-types', join('tools', 'drymount.mts')], { COOPANION_APP_ROOT: appRoot });
   runSuite('自描述核对（tools/describe.mts --check）', ['--experimental-transform-types', join('tools', 'describe.mts'), '--check'], { COOPANION_APP_ROOT: appRoot });
-}
-
-if (!hadStateFile && existsSync(stateFile)) {
-  rmSync(stateFile, { force: true });
-  hint('跑测试时生成的 .chat-image-patch.json 已删（它带着本机的 appRoot，不进包）');
 }
 
 console.log(`\n结果：${passed} 项通过，${warned} 个提醒，${failed} 个失败`);

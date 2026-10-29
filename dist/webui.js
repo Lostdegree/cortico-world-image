@@ -157,39 +157,6 @@ const ZH = {
   runtime: '运行时',
   unknown: '未知',
   loadBad: '读不到作品列表',
-  patchTitle: 'QQ 发图路径',
-  patchDesc: '两代第三方 QQ 扩展的本地图片路径都修：旧版（qqbot）的 qq_send_image / qq_view_image 先按桌宠工作区解析、扩展目录兜底；新版（qq-final）的 `[图片:…]` 除了图片库里的文件名，还认绝对路径与工作目录相对路径。第三方包升级会把改动覆写掉，所以每次启动都重打一遍；打不上会显示在这里。官方 QQ 扩展（qq）按 blob 句柄发图，用不着这些补丁，切过去后自动跳过、不碰文件。',
-  patchWhere: '安装目录',
-  patchCount: '补丁',
-  patchAt: '上次检查',
-  patchLastRestart: '上次重启请求',
-  patchAllDone: '处都在',
-  patchNone: '没有要打补丁的 QQ 扩展',
-  patchPending: '刚补上，重启后生效',
-  patchMissing: '有没打上的',
-  patchNoApp: '没找到安装目录',
-  patchUnchecked: '没检查过',
-  patchApplied: '这次补了',
-  patchStuck: '上一轮已经为同一处请求过重启，这次仍然缺——先别再重启，看看文件是不是只读。',
-  patchRepatch: '重打补丁',
-  patchRestore: '还原备份',
-  patchRestoreAsk: '按备份还原补丁？',
-  patchRestoreBody: '用更新下发的原文（.coopanion-orig）把 QQ 扩展的源文件覆盖回去，发图恢复成上游行为（旧版只认扩展目录、新版只认图片库文件名），重启控制台后生效。备份不会删，随时能再打回来。',
-  patchRestoreDone: '已按备份还原',
-  patchRestoreNone: '没动：文件本来就是原文',
-  patchRestoreBad: '还原出错',
-  patchRestored: '已还原',
-  patchRestoredAt: '上次还原',
-  patchBackup: '备份',
-  patchBackupNone: '没有备份',
-  patchBackupSame: '与当前一致',
-  patchRestart: '重启控制台',
-  patchRestartAsk: '现在重启控制台？',
-  patchRestartBody: '控制台会自己重启（几秒钟），正在跑的对话会断。QQ 扩展的补丁要重启才装载。',
-  patchRestartSent: '重启请求已发出，稍等几秒',
-  patchRestartBad: '重启请求没送到',
-  patchRepatched: '又对了一遍',
-  patchRepatchedBad: '对补丁时出错',
 };
 
 const EN = {
@@ -313,39 +280,6 @@ const EN = {
   runtime: 'Runtime',
   unknown: 'unknown',
   loadBad: 'Could not read the picture list',
-  patchTitle: 'QQ Image Paths',
-  patchDesc: 'Both third-party QQ extensions get their local picture paths fixed: the legacy one (qqbot) resolves qq_send_image / qq_view_image against your pet workspace first, and the new one (qq-final) accepts absolute or working-dir-relative paths in its `[图片:…]` tag instead of only image-library file names. The updater overwrites them, so they are re-applied on every start; anything that fails shows up here. With the official QQ extension (qq) pictures travel as blob handles, so these patches are skipped and no file is touched.',
-  patchWhere: 'Install dir',
-  patchCount: 'Patches',
-  patchAt: 'Checked',
-  patchLastRestart: 'Last restart request',
-  patchAllDone: 'in place',
-  patchNone: 'no QQ extension needs patching',
-  patchPending: 'applied, takes effect after restart',
-  patchMissing: 'some are missing',
-  patchNoApp: 'install directory not found',
-  patchUnchecked: 'not checked yet',
-  patchApplied: 'applied now',
-  patchStuck: 'A restart was already requested for these and they are still missing — stop restarting and check whether the files are read-only.',
-  patchRepatch: 'Re-apply',
-  patchRestore: 'Restore from backup',
-  patchRestoreAsk: 'Restore the patches from backup?',
-  patchRestoreBody: 'Overwrites the QQ extension sources with the updater-shipped originals (.coopanion-orig); picture sending goes back to upstream behaviour (the legacy extension only accepts its own folder, the new one only image-library names) after a console restart. Backups are kept, so you can re-apply any time.',
-  patchRestoreDone: 'Restored from backup',
-  patchRestoreNone: 'Nothing changed: files were already pristine',
-  patchRestoreBad: 'Restore failed',
-  patchRestored: 'restored',
-  patchRestoredAt: 'Last restore',
-  patchBackup: 'Backup',
-  patchBackupNone: 'no backup',
-  patchBackupSame: 'same as current file',
-  patchRestart: 'Restart console',
-  patchRestartAsk: 'Restart the console now?',
-  patchRestartBody: 'The console restarts by itself (a few seconds); a running conversation is cut off. The QQ patch only loads on restart.',
-  patchRestartSent: 'Restart requested, give it a few seconds',
-  patchRestartBad: 'Restart request did not go through',
-  patchRepatched: 'Checked again',
-  patchRepatchedBad: 'Patch check failed',
 };
 
 const text = (language) => (language === 'en' ? EN : ZH);
@@ -1144,22 +1078,6 @@ function statusPanel(ctx) {
     renderChain();
   };
 
-  const patchCard = ctx.ui.section(tx.patchTitle, tx.patchDesc);
-  const patchHead = ctx.ui.h('div', 'iw-conn');
-  patchCard.appendChild(patchHead);
-  const patchKv = ctx.ui.h('div');
-  patchCard.appendChild(patchKv);
-  const patchLines = ctx.ui.h('div');
-  patchCard.appendChild(patchLines);
-  const patchBar = ctx.ui.actions();
-  patchBar.append(
-    ctx.ui.button(tx.patchRepatch, { size: 'sm', onClick: () => { void repatch(); } }),
-    ctx.ui.button(tx.patchRestore, { size: 'sm', onClick: () => { void restorePatches(); } }),
-    ctx.ui.button(tx.patchRestart, { size: 'sm', onClick: () => { void restartConsole(); } }),
-  );
-  patchCard.appendChild(patchBar);
-  body.appendChild(patchCard);
-
   const kvBox = ctx.ui.h('div');
   body.appendChild(kvBox);
 
@@ -1170,54 +1088,6 @@ function statusPanel(ctx) {
   body.appendChild(note);
 
   let currentDir = '';
-
-  /** QQ 发图路径补丁：2 处都在？这次补了几处？备份还在吗？要不要重启？ */
-  const renderPatch = (p) => {
-    const total = Number(p?.total ?? 0);
-    const done = Number(p?.done ?? 0);
-    const patched = Array.isArray(p?.patched) ? p.patched : [];
-    const failed = Array.isArray(p?.failed) ? p.failed : [];
-    const pending = Boolean(p?.restartPending);
-    const restored = Array.isArray(p?.restored?.restored) ? p.restored.restored : [];
-    const backups = Array.isArray(p?.backups) ? p.backups : [];
-    const label = p?.error
-      ? `${tx.patchNoApp}：${p.error}`
-      : failed.length
-        ? `${tx.patchMissing}（${failed.length}）`
-        : !p?.at
-          ? tx.patchUnchecked
-          : restored.length
-            ? tx.patchRestored
-            : (pending ? tx.patchPending : (total === 0 ? tx.patchNone : `${done}/${total} ${tx.patchAllDone}`));
-    const tone = p?.error || failed.length || restored.length ? 'off' : 'on';
-    patchHead.replaceChildren(ctx.ui.pill(label, tone));
-    if (patched.length) patchHead.appendChild(ctx.ui.pill(`${tx.patchApplied} ${patched.length}`, 'on'));
-    const fileOf = (path) => String(path || '').split(/[\\/]/).pop();
-    const backupText = backups.length
-      ? backups.map((b) => `${fileOf(b.file)}：${b.hasBackup ? (b.same ? tx.patchBackupSame : `${b.backupBytes}B`) : tx.patchBackupNone}`).join(' · ')
-      : tx.none;
-    patchKv.replaceChildren(ctx.ui.kv([
-      { k: tx.patchWhere, v: ctx.ui.h('span', 'mono', String(p?.appRoot || '—')) },
-      { k: tx.patchCount, v: total === 0 ? (tx.patchNone) : `${done}/${total}` },
-      { k: tx.patchAt, v: p?.at ? ctx.ui.fmt.clock(p.at) : tx.none },
-      { k: tx.patchBackup, v: ctx.ui.h('span', 'mono', backupText) },
-      ...(restored.length
-        ? [{ k: tx.patchRestoredAt, v: `${restored.length} · ${p?.restored?.at ? ctx.ui.fmt.clock(p.restored.at) : ''}` }]
-        : []),
-      {
-        k: tx.patchLastRestart,
-        v: p?.restart
-          ? `${p.restart.detail || p.restart.status || '—'} · ${p.restart.at ? ctx.ui.fmt.clock(p.restart.at) : ''}`
-          : tx.none,
-      },
-    ]));
-    patchLines.replaceChildren();
-    for (const f of failed) patchLines.appendChild(ctx.ui.h('div', 'iw-sub', `${f.id} — ${f.error || f.what || ''}`));
-    for (const b of backups) {
-      if (!b.hasBackup) patchLines.appendChild(ctx.ui.h('div', 'iw-sub', `${b.id} — ${tx.patchBackupNone}`));
-    }
-    if (p?.stuck) patchLines.appendChild(ctx.ui.h('div', 'iw-sub', tx.patchStuck));
-  };
 
   const render = (s) => {
     currentDir = String(s?.dir ?? '');
@@ -1254,7 +1124,6 @@ function statusPanel(ctx) {
       chainBroken = parsed.error;
       renderChain();
     }
-    renderPatch(s?.patch);
   };
 
   const load = async (busy) => {
@@ -1344,54 +1213,6 @@ function statusPanel(ctx) {
       ctx.ui.toast(tx.keyCleared, 'ok');
     } catch (err) {
       ctx.ui.toast(message(err), 'bad');
-    }
-  };
-
-  const repatch = async () => {
-    const release = ctx.ui.busy(tx.busier, tx.patchRepatch);
-    try {
-      const p = await ctx.invoke('repatch', []);
-      renderPatch(p);
-      const bad = p?.error || (p?.failed?.length ? `${p.failed.length} 处没打上` : '');
-      if (bad) ctx.ui.toast(`${tx.patchRepatchedBad}：${bad}`, 'bad');
-      else if (p?.restartPending) ctx.ui.toast(tx.patchPending, 'ok');
-      else ctx.ui.toast(tx.patchRepatched, 'ok');
-    } catch (err) {
-      ctx.ui.toast(`${tx.patchRepatchedBad}：${message(err)}`, 'bad');
-    } finally {
-      release.dispose();
-    }
-  };
-
-  const restorePatches = async () => {
-    const ok = await ctx.ui.confirm({ title: tx.patchRestoreAsk, body: tx.patchRestoreBody, danger: true });
-    if (!ok) return;
-    const release = ctx.ui.busy(tx.busier, tx.patchRestore);
-    try {
-      const p = await ctx.invoke('restore', []);
-      renderPatch(p);
-      const bad = p?.error || (p?.restored?.failed?.length ? `${p.restored.failed.length} 处没还原` : '');
-      if (bad) ctx.ui.toast(`${tx.patchRestoreBad}：${bad}`, 'bad');
-      else if (p?.restored?.restored?.length) ctx.ui.toast(tx.patchRestoreDone, 'ok');
-      else ctx.ui.toast(tx.patchRestoreNone, 'ok');
-      await load(false);
-    } catch (err) {
-      ctx.ui.toast(`${tx.patchRestoreBad}：${message(err)}`, 'bad');
-    } finally {
-      release.dispose();
-    }
-  };
-
-  const restartConsole = async () => {
-    const ok = await ctx.ui.confirm({ title: tx.patchRestartAsk, body: tx.patchRestartBody });
-    if (!ok) return;
-    try {
-      const p = await ctx.invoke('restart', []);
-      const sent = Boolean(p?.restart?.ok);
-      renderPatch(p);
-      ctx.ui.toast(sent ? tx.patchRestartSent : `${tx.patchRestartBad}：${p?.restart?.detail || p?.restart?.status || ''}`, sent ? 'ok' : 'bad');
-    } catch (err) {
-      ctx.ui.toast(`${tx.patchRestartBad}：${message(err)}`, 'bad');
     }
   };
 

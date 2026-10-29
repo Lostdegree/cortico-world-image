@@ -15,7 +15,6 @@ import { fileURLToPath } from 'node:url';
 
 import { ImageApiError, editImage, generateImage, normalizeCloudSize } from './api.js';
 import { ChainError, chainSnapshot, entryLabel, entryState, parseChainEntries, runChain } from './chain.js';
-import { applyChatImagePatches, consolePort, patchBackupStatus, requestConsoleRestart, resolveAppRoot, restoreChatImagePatches } from './chat-image-patch.js';
 import { comfyDraw, comfyEdit, listModels, probe as probeComfy } from './comfyui.js';
 import { DEFAULTS, ID, configGroup, text } from './config.js';
 import { Gallery } from './gallery.js';
@@ -36,81 +35,21 @@ const MIME_BY_EXT = {
 const msg = (err) => (err instanceof Error ? err.message : String(err));
 const asText = (value) => (typeof value === 'string' ? value.trim() : '');
 
-/** 本扩展包根目录（补丁状态文件、`ENV_PROMPT.md` 都在这一层）。 */
-const PACKAGE_DIR = resolve(fileURLToPath(new URL('..', import.meta.url)));
-
 // ---------------------------------------------------------------------------
-// 自愈补丁：QQ 扩展里的两处代码每次启动都对一遍
+// QQ 发图：本扩展不碰别人的安装目录了
 // ---------------------------------------------------------------------------
 //
-// 这里只给**旧版**第三方 QQ 扩展（`cortico-world-qq-better-alont1`，world `qqbot`）打补丁：
-// 它的 `qq_send_image` / `qq_view_image` 只按扩展目录解析相对路径，这里改成先按桌宠工作区
-// （记忆目录）解析、扩展目录兜底。第三方包升级会把这些文件覆写回去，所以靠扩展模块的顶层
-// 代码每次启动重打一遍 —— `loadExtensions()` 无论世界开没开都会 import 本模块。
+// 以前这里有一整套「给第三方 QQ 扩展打补丁」的代码（0.3.x–0.6.2）：每次启动重写
+// `cortico-world-qq-better-alont1` 与 `cortico-world-qq-final` 的源码，让 `[图片:…]`
+// 认绝对路径与工作区相对路径。2026-10-28 起这些补丁搬到了 `cortico-world-patchkit`（补丁台），
+// 由那边按版本留备份、按开关打与还原；本模块不再 import、不再写别的扩展的文件。
 //
-// 官方 `cortico-world-qq`（world `qq`）发图收的是 blob 句柄（`host.blob(...)`），根本不解析
-// 本地路径，用不着补丁；切到它之后 `worlds.qqbot.enabled=false`，这两处会自动记 absent、不碰文件。
-//
-// 0.3.0 起不再往桌宠包里打补丁（改用官方 `pet_say.images`）；早先版本打过的旧补丁会在启动时
-// 按 `.coopanion-orig` 备份还原回去。
-//
-// 打好的补丁写回了磁盘，但扩展的代码是进程启动时 import 的，要重启进程才装载；
-// 重启请求放在 `start()` 里（那时才拿得到控制台端口），并用状态文件防死循环。
-
-/** 最近一次补丁检查的结果；「状态」页显示它，也能手动重打或按备份还原。 */
-let PATCH_STATE = {
-  at: '',
-  appRoot: '',
-  patched: [],
-  failed: [],
-  done: 0,
-  total: 0,
-  stuck: false,
-  restartPending: false,
-  /** 这次启动从桌宠包里还原掉的旧补丁文件（0.3.0 起才有）。 */
-  reverted: [],
-  /** 新版 QQ 扩展（qq-final）那两处补丁这次在不在：在才敢在回执里教模型直接写图片路径。 */
-  qqFinal: false,
-  error: '',
-  restart: null,
-  /** 手动还原的记录：`{at, restored:[id], failed:[id], byFile:[{file,backup,state}]}`，没还原过就是 null。 */
-  restored: null,
-};
-
-/** 重新对一遍补丁，并把结果收进 `PATCH_STATE`。 */
-function refreshPatchState({ stateDir, log } = {}) {
-  const appRoot = resolveAppRoot([stateDir, process.cwd()]);
-  const report = applyChatImagePatches(appRoot, { stateDir, log });
-  PATCH_STATE = {
-    ...PATCH_STATE,
-    at: new Date().toISOString(),
-    appRoot: report.appRoot ?? appRoot ?? '',
-    patched: report.patched,
-    failed: report.results
-      .filter((r) => r.state === 'failed' || r.state === 'missing')
-      .map((r) => ({ id: r.id, what: r.what, error: r.error ?? '' })),
-    done: report.results.filter((r) => r.state === 'done').length,
-    // 可选补丁（QQ 扩展没装、或那个世界没开）记 absent：不计进总数，免得状态页写「1/2 没打上」。
-    total: report.results.filter((r) => r.state !== 'absent').length,
-    // 切到官方 QQ 扩展后一处都不用打：状态页据此显示「没有要打补丁的 QQ 扩展」。
-    skipped: report.results.filter((r) => r.state === 'absent').length,
-    stuck: report.stuck,
-    restartPending: report.restartPending,
-    reverted: report.reverted?.filter((r) => r.reverted).map((r) => r.file) ?? [],
-    qqFinal: report.results.some((r) => r.id === 'qqf-image-paths' && (r.state === 'patched' || r.state === 'done')),
-    error: report.error ?? '',
-    restored: report.patched.length ? null : PATCH_STATE.restored,
-  };
-  return PATCH_STATE;
-}
-
-if (process.env.COOPANION_CHAT_IMAGE_PATCH !== '0') {
-  try {
-    refreshPatchState({ stateDir: PACKAGE_DIR });
-  } catch (err) {
-    PATCH_STATE.error = msg(err);
-  }
-}
+// 本扩展只负责把图和信息说清楚：
+// - 旧包 `cortico-world-qq-better-alont1`：`qq_send_image` 填文件绝对路径（不打补丁也能用绝对路径）；
+// - 新版 `cortico-world-qq-final` 0.6.35 及更早：打上补丁台那处「发图认路径」后可以写路径；
+// - 新版 `cortico-world-qq-final` 0.6.36 起只发 `dist/`：没有源码可打，把它配置里的图片库目录
+//   （`worlds.qqbot.imageDir`）指到本扩展的出图目录，正文写 `[图片:文件名]` 就能发。
+// 三条都在设置项的说明与 ENV_PROMPT 里写着，模型照着说就行。
 
 export class ImageWorld {
   #host = null;
@@ -119,7 +58,6 @@ export class ImageWorld {
   #busy = 0;
   #lastError = '';
   #lastItemAt = '';
-  #restartTimer = null;
 
   constructor(opts = {}) {
     this.id = ID;
@@ -627,10 +565,14 @@ export class ImageWorld {
     if (spec.prompt) lines.push(`画面：${spec.prompt}`);
     if (spec.warning) lines.push(spec.warning);
     lines.push(
-      '图已进入本次对话，也显示在「图片工坊」页。要发给某人或某个群，就把上面那行 `[blob …]` 的句柄交给那个世界的发图工具'
-      + '（官方 QQ 扩展是 `qq_draft` 的 `image`；旧版 QQ 扩展是 `qq_send_image`，填文件绝对路径'
-      + (PATCH_STATE.qqFinal ? '；新版 QQ 扩展（qq-final）在 `qq_send` 的正文里写 `[图片:文件绝对路径]`' : '')
-      + '）。',
+      '图已进入本次对话，也显示在「图片工坊」页。要发给某人或某个群：'
+      + '官方 QQ 扩展（world `qq`）把上面那行 `[blob …]` 句柄交给 `qq_draft` 的 `image`；'
+      + '旧版第三方 QQ 扩展（`cortico-world-qq-better-alont1`）用 `qq_send_image` 填文件的绝对路径；'
+      + '新版第三方 QQ 扩展（`cortico-world-qq-final`）在正文里写 `[图片:文件名]`，'
+      + `这次就是 [图片:${name}]——`
+      + '0.6.35 及更早的版本要靠补丁台的「发图认路径」补丁才能写路径，'
+      + '0.6.36 起只发编译产物、没有源码可打，需要把 QQ 扩展配置里的图片库目录（`worlds.qqbot.imageDir`）'
+      + '指到本扩展的出图目录（设置页「保存目录」那一项）。',
     );
     return {
       text: lines.join('\n'),
@@ -670,16 +612,6 @@ export class ImageWorld {
     const t = this.#text();
     const env = this.#envState();
     const gallery = this.#galleryFor();
-    const patchRestored = Boolean(PATCH_STATE.restored?.restored?.length);
-    const patchValue = PATCH_STATE.error
-      ? t.patchOff
-      : !PATCH_STATE.at
-        ? t.patchUnchecked
-        : PATCH_STATE.failed.length
-          ? t.patchMissing(PATCH_STATE.failed.length)
-          : patchRestored
-            ? t.patchRestored
-            : (PATCH_STATE.restartPending ? t.patchPending : t.patchOk);
     return {
       label: t.label,
       lamps: [{
@@ -690,11 +622,6 @@ export class ImageWorld {
       badges: [
         { label: t.badgeWorks, value: String(gallery.count), tone: gallery.count ? 'on' : 'off' },
         { label: t.badgeKey, value: env.keySet ? t.keySet : t.keyUnset, tone: env.keySet ? 'on' : 'off' },
-        {
-          label: t.badgePatch,
-          value: patchValue,
-          tone: PATCH_STATE.error || !PATCH_STATE.at || PATCH_STATE.failed.length || PATCH_STATE.restartPending || patchRestored ? 'off' : 'on',
-        },
       ],
       panels: [
         { id: 'gallery', title: t.panelGalleryTitle, description: t.panelGalleryDesc, getMethods: ['list'] },
@@ -734,9 +661,6 @@ export class ImageWorld {
       switch (method) {
         case 'state': return this.#state();
         case 'probe': return await this.#probeChain();
-        case 'repatch': return this.#repatch();
-        case 'restore': return this.#restore();
-        case 'restart': return this.#askRestart('控制台手动请求');
         case 'setKey': return this.#setKey(list[0]);
         case 'clearKey': return this.#setKey('');
         // 面板「自检」按钮发的是 status.selftest（旧版挂在 gallery 上），两处都认。
@@ -776,11 +700,6 @@ export class ImageWorld {
       models: this.#raw('models'),
       chain: env.chain,
       chainError: env.chainError,
-      patch: {
-        ...PATCH_STATE,
-        packageDir: PACKAGE_DIR,
-        backups: patchBackupStatus(PATCH_STATE.appRoot || resolveAppRoot([PACKAGE_DIR, process.cwd()])),
-      },
     };
   }
 
@@ -863,97 +782,6 @@ export class ImageWorld {
       }),
     );
     return { at, error: '', items };
-  }
-
-  /**
-   * 重新对一遍「QQ 发图路径」补丁（顺带还原桌宠包上的旧补丁）。
-   *
-   * 平时用不着（每次启动都会自己打），留给两处：更新覆写后发现没打上，
-   * 或者想看看到底改了哪几处。
-   */
-  #repatch() {
-    if (process.env.COOPANION_CHAT_IMAGE_PATCH === '0') {
-      return { ...PATCH_STATE, packageDir: PACKAGE_DIR, skipped: 'COOPANION_CHAT_IMAGE_PATCH=0：这次不改安装目录。' };
-    }
-    refreshPatchState({ stateDir: PACKAGE_DIR, log: this.#host?.log });
-    if (PATCH_STATE.restartPending) this.#scheduleRestart('刚补上补丁');
-    return { ...PATCH_STATE, packageDir: PACKAGE_DIR };
-  }
-
-  /**
-   * 按 `.coopanion-orig` 手动还原：把改过的文件覆盖回更新下发的原样。
-   *
-   * 备份不删，所以这是可逆的（再点「重打补丁」或下次启动就会补回来）。
-   * 还原后 QQ 发图回到「只认扩展目录的相对路径」，要重启才生效；但这里**不自动重启**
-   * ——用户是主动撤销的，等他自己决定。
-   */
-  #restore() {
-    const appRoot = PATCH_STATE.appRoot || resolveAppRoot([PACKAGE_DIR, process.cwd()]) || '';
-    if (process.env.COOPANION_CHAT_IMAGE_PATCH === '0') {
-      return {
-        ...PATCH_STATE,
-        packageDir: PACKAGE_DIR,
-        restored: { at: new Date().toISOString(), restored: [], failed: [], skipped: 'COOPANION_CHAT_IMAGE_PATCH=0：这次不改安装目录。' },
-      };
-    }
-    const res = restoreChatImagePatches(appRoot, { stateDir: PACKAGE_DIR, log: this.#host?.log });
-    const at = new Date().toISOString();
-    PATCH_STATE = {
-      ...PATCH_STATE,
-      at,
-      appRoot: res.appRoot ?? appRoot,
-      patched: [],
-      failed: [],
-      done: 0,
-      total: res.results.length,
-      stuck: false,
-      restartPending: false,
-      error: res.error ?? '',
-      qqFinal: false,
-      restored: {
-        at,
-        restored: res.restored,
-        failed: res.failed,
-        byFile: res.results
-          .filter((r) => r.state === 'restored')
-          .map((r) => ({ id: r.id, file: r.file, backup: r.backup })),
-      },
-    };
-    this.#host?.log?.[res.failed.length ? 'warn' : 'info']?.(
-      `图片工坊补丁:按备份还原了 ${res.restored.length} 个文件${res.failed.length ? `，失败:${res.failed.join(',')}` : ''}`,
-    );
-    return { ...PATCH_STATE, packageDir: PACKAGE_DIR };
-  }
-
-  /** 请控制台重启进程：桌宠那一侧的补丁要重启才装载。 */
-  async #askRestart(reason) {
-    const appRoot = PATCH_STATE.appRoot || resolveAppRoot([PACKAGE_DIR, process.cwd()]) || '';
-    const port = consolePort({ appRoot, botDir: this.botDir });
-    const stamp = new Date().toISOString();
-    if (process.env.COOPANION_CHAT_IMAGE_PATCH === '0') {
-      PATCH_STATE.restart = { at: stamp, port, status: 0, ok: false, reason, detail: 'COOPANION_CHAT_IMAGE_PATCH=0：检查模式下不发重启请求。' };
-      return { ...PATCH_STATE, packageDir: PACKAGE_DIR };
-    }
-    try {
-      const res = await requestConsoleRestart(port);
-      const ok = res.status >= 200 && res.status < 300;
-      PATCH_STATE.restart = { at: stamp, port, status: res.status, ok, reason, detail: '' };
-      this.#host?.log?.[ok ? 'info' : 'warn']?.(`图片工坊补丁:重启请求 → ${res.status}(端口 ${port},${reason})`);
-    } catch (err) {
-      PATCH_STATE.restart = { at: stamp, port, status: 0, ok: false, reason, detail: msg(err) };
-      this.#host?.log?.warn?.(`图片工坊补丁:重启请求没送到(端口 ${port}):${msg(err)}`);
-    }
-    return { ...PATCH_STATE, packageDir: PACKAGE_DIR };
-  }
-
-  /** 延迟几秒再请重启：等控制台自己的 web 服务起来。 */
-  #scheduleRestart(reason) {
-    if (this.#restartTimer) return;
-    this.#restartTimer = setTimeout(() => {
-      this.#restartTimer = null;
-      void this.#askRestart(reason);
-    }, 4000);
-    this.#restartTimer.unref?.();
   }
 
   #setKey(value) {
@@ -1078,18 +906,9 @@ export class ImageWorld {
       model: this.#str('model'),
       key: this.apiKey() ? '已配置' : '未配置',
     });
-    if (PATCH_STATE.error) this.#host?.log?.warn?.(`图片工坊补丁:${PATCH_STATE.error}`);
-    if (PATCH_STATE.failed.length) {
-      this.#host?.log?.warn?.(`图片工坊补丁:有 ${PATCH_STATE.failed.length} 处没打上(${PATCH_STATE.failed.map((f) => f.id).join(', ')}),QQ 发图可能不认工作区相对路径`);
-    }
-    if (PATCH_STATE.restartPending) this.#scheduleRestart('这次启动补上了新补丁');
   }
 
   async stop() {
-    if (this.#restartTimer) {
-      clearTimeout(this.#restartTimer);
-      this.#restartTimer = null;
-    }
     this.#streams.clear();
     this.#host = null;
   }
