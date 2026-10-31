@@ -191,7 +191,9 @@ if (!block || typeof block !== 'object' || Array.isArray(block)) {
     if (!safeRelativeFile(icon) || !ICON_TYPES.some((ext) => icon.toLowerCase().endsWith(ext))) {
       bad(`cortico.icon 只认 ${ICON_TYPES.join(' / ')}：${JSON.stringify(icon)}`);
     } else if (!existsSync(join(pkgDir, icon))) bad(`icon 指向的 ${icon} 不在包里`);
-    else ok(`icon＝${icon} 在包里`);
+    else ok(`icon＝${icon} 在包里（${(statSync(join(pkgDir, icon)).size / 1024).toFixed(1)} KB）`);
+  } else {
+    hint('没有 cortico.icon：市场卡片会显示默认的 Cortico 标志');
   }
 }
 

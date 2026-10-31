@@ -397,7 +397,8 @@ node tools/prepublish.mjs --only-static                # 只做静态检查
 
 ```
 cortico-world-image/
-├─ package.json        # cortico: { kind: world, api: 6, webUiClient: dist/webui.js, describe: describe.json }
+├─ package.json        # cortico: { kind: world, api: 6, icon: icon.png, tags: [creative, requires-key], locales: { zh, en }, webUiClient: dist/webui.js, describe: describe.json }
+├─ icon.png            # 市场卡片 / 详情页用的图标（512×512，cortico.icon 指向它）
 ├─ README.md
 ├─ PUBLISH.md          # 发布流程（维护者用，不打进 npm 包）
 ├─ ENV_PROMPT.md       # 随环境提示词交给桌宠的说明（含 {{image.dir}} / {{image.ready}} 占位符）

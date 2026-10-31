@@ -1,6 +1,6 @@
 {
   "name": "cortico-world-image",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "type": "module",
   "description": "Image Studio（图片工坊）—— 给 Coopanion 桌宠的 cortico World 扩展：用任意 OpenAI 兼容的图片接口画图/改图、落盘成作品库、把图贴进控制台「对话」页；也可以接本地 ComfyUI，按优先级链轮流试。 / A cortico World extension that draws through any OpenAI-compatible image API or a local ComfyUI, keeps pictures on disk and shows them in the console.",
   "license": "MIT",
@@ -35,6 +35,7 @@
     "dist",
     "tools",
     "describe.json",
+    "icon.png",
     "ENV_PROMPT.md",
     "README.md",
     "CHANGELOG.md"
@@ -50,6 +51,21 @@
     "kind": "world",
     "api": 6,
     "displayName": "图片工坊",
+    "icon": "icon.png",
+    "tags": [
+      "creative",
+      "requires-key"
+    ],
+    "locales": {
+      "zh": {
+        "displayName": "图片工坊",
+        "description": "给桌宠的画图工作台：按模型链挑一档（本地 ComfyUI 或云端接口）画图、改图，成品存进作品库并贴到对话里。"
+      },
+      "en": {
+        "displayName": "Image Studio",
+        "description": "A drawing workbench for the pet: pick a tier from a model chain (local ComfyUI or an OpenAI-compatible endpoint), draw or edit, keep the results in a studio gallery and show them in the chat."
+      }
+    },
     "webUiClient": "dist/webui.js",
     "describe": "describe.json"
   }
