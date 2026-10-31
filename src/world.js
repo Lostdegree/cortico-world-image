@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 
 import { ImageApiError, editImage, generateImage, normalizeCloudSize } from './api.js';
 import { ChainError, chainSnapshot, entryLabel, entryState, parseChainEntries, runChain } from './chain.js';
-import { comfyDraw, comfyEdit, listModels, probe as probeComfy } from './comfyui.js';
+import { comfyDraw, comfyEdit, listModels, normalizeWorkflow, probe as probeComfy } from './comfyui.js';
 import { DEFAULTS, ID, configGroup, text } from './config.js';
 import { Gallery } from './gallery.js';
 import { samplePng } from './png.js';
@@ -311,10 +311,28 @@ export class ImageWorld {
   async #edit(args) {
     const prompt = asText(args.prompt);
     if (!prompt) return { text: '[image_edit 没执行] prompt 是空的。', failed: true };
-    const local = this.#localOf(args.image);
-    if (!local) {
+    // 参考图可以给一张（image）或多张（images，最多 4 张）
+    const asked = Array.isArray(args.images) ? args.images.map((it) => asText(it)).filter(Boolean) : [];
+    const refs = asked.length ? asked : (asText(args.image) ? [asText(args.image)] : []);
+    if (!refs.length) {
       return {
-        text: `[image_edit 没执行] 找不到那张图：${asText(args.image) || '(空)'}。给绝对路径，或 image_gallery 里的编号。`,
+        text: '[image_edit 没执行] 没给参考图：用 image 给一张，或用 images 给多张（绝对路径，或 image_gallery 里的编号）。',
+        failed: true,
+      };
+    }
+    if (refs.length > 4) {
+      return { text: `[image_edit 没执行] 一次最多改 4 张，这次给了 ${refs.length} 张。`, failed: true };
+    }
+    const locals = [];
+    const missing = [];
+    for (const ref of refs) {
+      const local = this.#localOf(ref);
+      if (local) locals.push(local);
+      else missing.push(ref);
+    }
+    if (missing.length) {
+      return {
+        text: `[image_edit 没执行] 找不到${missing.length > 1 ? `这 ${missing.length} 张` : '那张'}图：${missing.join('、')}。给绝对路径，或 image_gallery 里的编号。`,
         failed: true,
       };
     }
@@ -327,7 +345,7 @@ export class ImageWorld {
     const quality = asText(args.quality);
     this.#busy += 1;
     try {
-      const res = await runChain(usable, (entry) => this.#editWith(entry, { prompt, size, quality, local }), { only: named });
+      const res = await runChain(usable, (entry) => this.#editWith(entry, { prompt, size, quality, locals }), { only: named });
       const used = res.entry;
       const label = entryLabel(used);
       const shown = res.revisedPrompt ? String(res.revisedPrompt) : prompt;
@@ -343,8 +361,9 @@ export class ImageWorld {
         size: dims,
         source: 'edit',
       });
+      const hints = [res.notice, this.#sizeHint(used, size)].filter(Boolean);
       return this.#outcome({
-        verb: '改好了。',
+        verb: locals.length > 1 ? `改好了（用了 ${locals.length} 张参考图）。` : '改好了。',
         bytes: res.bytes,
         mime: res.mime,
         prompt: shown,
@@ -354,7 +373,7 @@ export class ImageWorld {
         item,
         warning,
         attempts: res.attempts,
-        hint: this.#sizeHint(used, size),
+        hint: hints.join('\n'),
       });
     } catch (err) {
       return this.#failure('image_edit', err);
@@ -381,7 +400,7 @@ export class ImageWorld {
         cfg: entry.cfg,
         sampler: entry.sampler,
         scheduler: entry.scheduler,
-        workflow: entry.workflow,
+        workflow: entry.workflow ? this.#entryWorkflow(entry) : null,
         prefix: 'coopanion',
         timeoutMs: entry.timeoutMs,
       });
@@ -403,8 +422,14 @@ export class ImageWorld {
     });
   }
 
-  /** 用一档后端改一张已有的图。 */
-  async #editWith(entry, { prompt, size, quality, local }) {
+  /** 用一档后端改图：`locals` 是一张或多张本地参考图（已确认存在）。 */
+  async #editWith(entry, { prompt, size, quality, locals }) {
+    const refs = locals.map((local) => ({
+      bytes: readFileSync(local.path),
+      mime: local.mime,
+      name: local.path.split(/[\\/]/).pop(),
+    }));
+    const workflow = entry.workflow ? this.#entryWorkflow(entry) : null;
     if (entry.preset === 'comfyui') {
       const res = await comfyEdit({
         baseUrl: entry.baseUrl,
@@ -416,16 +441,14 @@ export class ImageWorld {
         loras: entry.loras,
         negative: entry.negative,
         prompt,
-        image: readFileSync(local.path),
-        mime: local.mime,
-        name: local.path.split(/[\\/]/).pop(),
+        images: refs,
         size: size || entry.size,
         denoise: entry.denoise,
         steps: entry.steps,
         cfg: entry.cfg,
         sampler: entry.sampler,
         scheduler: entry.scheduler,
-        workflow: entry.workflow,
+        workflow,
         prefix: 'coopanion',
         timeoutMs: entry.timeoutMs,
       });
@@ -435,19 +458,25 @@ export class ImageWorld {
     if (!key) {
       throw new ImageApiError(`没有配置 ${entry.apiKeySecret || this.#str('apiKeySecret')}`, { status: 401 });
     }
-    return await editImage({
+    const res = await editImage({
       baseUrl: entry.baseUrl,
       apiKey: key,
       model: entry.model,
       prompt,
-      image: readFileSync(local.path),
-      mime: local.mime,
-      name: local.path.split(/[\\/]/).pop(),
+      images: refs,
       size: size || entry.size,
       quality: quality || entry.quality,
       format: entry.format,
       timeoutMs: entry.timeoutMs,
     });
+    return { ...res, notice: res.notice ?? '' };
+  }
+
+  /** 这一档的自定义工作流：贴进来的可能是对象，也可能是整份 JSON 字符串；脏的话直接讲清楚。 */
+  #entryWorkflow(entry) {
+    const { workflow, error } = normalizeWorkflow(entry.workflow);
+    if (error) throw new ImageApiError(`这一档的自定义工作流用不了：${error}`, { status: 400 });
+    return workflow;
   }
 
   async #list(args) {

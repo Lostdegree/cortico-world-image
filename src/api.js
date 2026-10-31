@@ -243,25 +243,44 @@ function dataUri(bytes, mime) {
 /**
  * 端点没有 `/images/edits` 时的退路：把原图编成 data URI，跟着 prompt 一起
  * 发给 `/images/generations` 的扩展字段 `image`（阿里云百炼的兼容模式就这么改图）。
+ * 这条退路只带得动一张图，多张时给回执留一句 `notice`。
  */
 async function editViaGenerations(opts, timeoutMs) {
+  const refs = refsOf(opts);
   const body = generationBody(opts);
-  body.image = dataUri(opts.image, opts.mime);
+  body.image = dataUri(refs[0].bytes, refs[0].mime);
+  if (refs.length > 1) body.images = refs.map((ref) => dataUri(ref.bytes, ref.mime));
   const json = await postJson(joinUrl(opts.baseUrl, 'images/generations'), {
     apiKey: opts.apiKey,
     body,
     timeoutMs,
   });
-  return await materialize(json, { timeoutMs, format: opts.format });
+  const out = await materialize(json, { timeoutMs, format: opts.format });
+  if (refs.length > 1) {
+    out.notice = `这个端点的改图退路（/images/generations）只认第一张参考图，后面 ${refs.length - 1} 张没参与。`;
+  }
+  return out;
+}
+
+/** 参考图统一成数组：`images` 优先，其次单张 `image`。 */
+function refsOf(opts) {
+  const list = Array.isArray(opts.images) ? opts.images.filter((it) => it && it.bytes) : [];
+  if (list.length) return list;
+  if (opts.image) return [{ bytes: opts.image, mime: opts.mime, name: opts.name }];
+  throw new ImageApiError('没给参考图：image 或 images 至少给一个。', { status: 400 });
 }
 
 /**
  * 图生图 / 改图。先走 `/images/edits` 的 multipart；端点没这条路由（404/405）时
  * 退回 `/images/generations` 的 `image` 扩展字段，见 `editViaGenerations`。
- * @returns {Promise<{bytes: Buffer, mime: string, revisedPrompt: string|null}>}
+ *
+ * 多张参考图按 OpenAI 的写法提交成 `image[]`——这是主流兼容端点（OpenAI、百炼兼容模式、
+ * 一些自建网关）都认的形状；只认单张的端点会回 400，世界层会据此说清是谁不吃多图。
+ * @returns {Promise<{bytes: Buffer, mime: string, revisedPrompt: string|null, notice?: string}>}
  */
 export async function editImage(opts = {}) {
   const timeoutMs = Number(opts.timeoutMs) > 0 ? Number(opts.timeoutMs) : DEFAULT_TIMEOUT;
+  const refs = refsOf(opts);
   const form = new FormData();
   form.set('model', String(opts.model ?? ''));
   form.set('prompt', String(opts.prompt ?? ''));
@@ -270,7 +289,12 @@ export async function editImage(opts = {}) {
   if (size) form.set('size', size);
   const quality = String(opts.quality ?? '').trim();
   if (quality && quality.toLowerCase() !== 'auto') form.set('quality', quality);
-  form.set('image', new Blob([opts.image], { type: opts.mime ?? 'image/png' }), opts.name ?? 'image.png');
+  for (const [index, ref] of refs.entries()) {
+    const blob = new Blob([ref.bytes], { type: ref.mime ?? 'image/png' });
+    const name = ref.name ?? `image-${index + 1}.png`;
+    if (refs.length === 1) form.set('image', blob, name);
+    else form.append('image[]', blob, name);
+  }
   try {
     const json = await postForm(joinUrl(opts.baseUrl, 'images/edits'), { apiKey: opts.apiKey, form, timeoutMs });
     return await materialize(json, { timeoutMs, format: opts.format });

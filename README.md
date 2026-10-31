@@ -22,7 +22,7 @@
 | 工具 | 标签 | 作用 |
 | --- | --- | --- |
 | `image_draw` | `act` | 按文字描述画一张新图，落盘、记进索引（可带 `model` 点名用哪一档） |
-| `image_edit` | `act` | 拿一张已有的图按指令改（支持上传改图，或阿里云百炼式的 `image` 扩展字段；同样能带 `model`） |
+| `image_edit` | `act` | 拿已有的图按指令改（`image` 一张，或 `images` 最多四张参考图；同样能带 `model`）。多张参考图在支持多图编辑的端点上直接生效，只支持单图的地方会在回执里说「只有第一张参与了」 |
 | `image_gallery` | `read` | 列出画过的图，带编号与绝对路径 |
 | `image_show` | `speak` | 把一张旧图重新放回对话与作品页 |
 
@@ -251,7 +251,7 @@ pnpm add "D:\path\to\cortico-world-image" --ignore-workspace
 | `textEncoderType` | `unet` 的文本编码器类型，默认 `stable_diffusion`；Qwen 系编码器填 `qwen_image`（还认 `sd3` / `flux` / `cosmos` / `lumina2`） |
 | `loras` | ComfyUI 的 LoRA：`["add_detail.safetensors:0.6", {"name":"x.safetensors","strength":0.4,"clipStrength":0.25}]`（名字带扩展名，文件得先在 ComfyUI 的 `models/loras` 里） |
 | `steps` / `cfg` / `sampler` / `scheduler` / `denoise` / `negative` | ComfyUI 采样参数（默认 25 / 7 / euler / normal / 0.6）。`denoise` 在改图时就是改动幅度：0.6 起改得明显，只微调用 0.2~0.35 |
-| `workflow` | 自定义 ComfyUI API 工作流（对象）。给了就整份替换内置模板，占位符见下 |
+| `workflow` | 自定义 ComfyUI API 工作流（对象）。给了就整份替换内置模板，占位符见下。面板里点本地档的「工作流」按钮粘贴即可，不用手写 JSON |
 | `edit` | `false` = 这一档只用来画、不接改图（改图会跳到下一档） |
 | `enabled` | `false` = 跳过这一档 |
 
@@ -264,7 +264,13 @@ pnpm add "D:\path\to\cortico-world-image" --ignore-workspace
 扩展名、可带子目录），也能改 `negative`、`steps`、`cfg`、`sampler`、`scheduler`、`denoise`，
 以及**裸 UNet 三件套**（`unet` / `textEncoder` / `textEncoderType` / `vaeName`；填了它就忽略这一档的 `ckpt`）
 ——存的就是该档的 `loras`、`negative`、`steps`、`unet` 这些字段，等于面板版的「高级：JSON」。
-保存就是写 `worlds.image.models`；`workflow` 这类只能手写的字段仍点「高级：JSON」改原文——**链还空着时它自带一份现成范例**
+**自定义工作流**：本地 ComfyUI 那档的行里有个「工作流」按钮，点开是个大框，把 ComfyUI 里
+⚙ 菜单 →「Save (API Format)」存下来的 JSON 整份粘进去，点「校验」它会当场说能不能跑（几个节点、
+几个采样器、哪些占位符不认识、有没有 `{{image1}}` 这种多图位），点「保存工作流」就挂到这一档，
+行里会显示「工作流 · 已用自定义」。要回到内置模板就点「清空」。「高级：JSON」里仍能看到同一份
+（`workflow` 字段），两种改法等价。
+
+保存就是写 `worlds.image.models`；`workflow` 这类只能手写的字段也可以点「高级：JSON」改原文——**链还空着时它自带一份现成范例**
 （一档本地 ComfyUI，带 `ckpt`、两条 LoRA、采样参数与负面提示；一档云端），
 把 `ckpt` / `loras` 换成自己 `models` 里的文件名，「应用 JSON」再「保存模型链」就能用。
 「测试模型链」会挨档探活：ComfyUI 看 `/system_stats`，再用 `/object_info` 一次性核对 `ckpt`（或
@@ -281,7 +287,10 @@ pnpm add "D:\path\to\cortico-world-image" --ignore-workspace
 `ckpt` 写文件名（在子目录里就写相对路径）；裸 UNet 的三个文件放进 `models/diffusion_models`、
 `models/text_encoders`、`models/vae`。自定义 `workflow` 里可用的占位符：
 `prompt`、`negative`、`ckpt`、`width`、`height`、`size`、`steps`、`cfg`、`sampler`、`scheduler`、
-`seed`、`denoise`、`image`、`loras`、`prefix`、`filename`（写成 `{{prompt}}` 这样，认不出的原样留着）。
+`seed`、`denoise`、`image`（第一张参考图）、`image1`/`image2`/`image3`/`image4`（依次对应
+`image_edit` 的 `images`）、`images`（逗号连起来的所有参考图）、`loras`、`prefix`、`filename`、
+`note`（一小行说明，写工作流时不用管）；写成 `{{prompt}}` 这样，认不出的原样留着。
+占位符两边有别的字符（比如 `"a photo, {{prompt}}"`）时按字符串拼进去；整个值就是一个占位符时保留原类型。
 
 ### 密钥
 
@@ -306,6 +315,12 @@ pnpm add "D:\path\to\cortico-world-image" --ignore-workspace
   端点没有这条路由（回 404/405）时，`image_edit` 会自动退回 `/images/generations`，把原图编成
   `data:` URI 放进扩展字段 `image`——阿里云百炼的 OpenAI 兼容模式就是这么改图的，配上
   `baseUrl` 和模型（如 `qwen-image-3.0-pro`）即可，不用额外设置。
+
+**多张参考图（`image_edit` 的 `images`，最多四张）**：`/images/edits` 会把每张都作为 `image[]`
+一起传上去（支持多图编辑的端点——比如 OpenAI 的 `gpt-image-1` 系列、百炼的多图模式——直接生效）；
+退回 `/images/generations` 的那条路只认第一张，回执会明说「这个端点的改图退路只认第一张参考图，
+后面 N 张没参与」，不会假装已经用上。ComfyUI 那边则是 `{{image1}}`…`{{image4}}` 占位符，
+内置模板只用第一张；要真正合成多张，就在自定义工作流里各接一个 `LoadImage`。
 
 响应里认这些形状：`{data:[{b64_json|url}]}`、`{images:[...]}`、`{output|artifacts|content:[...]}`，
 以及顶层的 `{image|url|b64_json|image_url}`。base64 直接落盘，`http(s)` 链接会再下载一次。
@@ -416,7 +431,11 @@ cortico-world-image/
 - 桌宠包早于 0.2.0 时没有 `pet_say.images`，贴图这条路走不通（0.3.0 也因此不再支持老桌宠包）。
 - `image_edit` 先走 `/images/edits`（multipart 上传）；端点没这条路由（404/405）时自动退回
   `/images/generations` 的 `image` 扩展字段（data URI，阿里云百炼那类）。两条路都不通时会回一条
-  带 HTTP 码的错误，不是静默失败。
+  带 HTTP 码的错误，不是静默失败。多张参考图（`images`，最多四张）在 `/images/edits` 上一起传，
+  退回退路时只用第一张并在回执里说明。
+- 本地 ComfyUI 那档可以**整份替换内置工作流**：行里的「工作流」按钮粘 ComfyUI 的
+  「Save (API Format)」JSON，「校验」会当场挑毛病（界面格式、缺 `class_type`、连线指向不存在节点、
+  不认识的占位符），README 这节的占位符表就是它能认的全部；点「清空」回到内置模板。
 - 尺寸：`size` 能写 `1024x1536`、比例 `16:9` / `4:3`、或 `square` / `portrait` / `landscape`（中文
   `竖图` / `横图` / `方图` 也认），比例会换成一套对齐好的尺寸（16:9 → 1344×768，4:3 → 1152×864）；
   写死的数字只按 latent 要求对齐到 8，不动你写的整数。

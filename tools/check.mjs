@@ -581,6 +581,36 @@ try {
     await api.editImage({ ...editOpts, size: 'portrait' });
     check(calls[0].init.body.get('size') === '1024x1536', 'multipart 那条路的 size 也换成长宽', String(calls[0].init.body.get('size')));
 
+    // 6b. 多参考图：能走 multipart 的端点用 image[]，退路只吃得下第一张、得说清楚。
+    const twoRefs = [
+      { bytes: Buffer.from([1, 2, 3]), mime: 'image/png', name: 'a.png' },
+      { bytes: Buffer.from([4, 5, 6]), mime: 'image/png', name: 'b.png' },
+    ];
+    calls = stubFetch([['/images/edits', () => jsonResponse({ data: [{ b64_json: tinyB64 }] })]]);
+    await api.editImage({ ...editOpts, image: undefined, images: twoRefs });
+    const multiForm = calls[0].init.body;
+    check(multiForm instanceof FormData && multiForm.getAll('image[]').length === 2, '两张参考图按 image[] 提交', String(multiForm?.getAll?.('image[]')?.length));
+    check(!multiForm.has('image'), '多张时不混着发单数 image');
+    check(multiForm.getAll('image[]')[1].name === 'b.png', '第二张的文件名跟着走');
+
+    calls = stubFetch([
+      ['/images/edits', () => jsonResponse({ error: { message: 'not found' } }, 404)],
+      ['/images/generations', () => jsonResponse({ data: [{ b64_json: tinyB64 }] })],
+    ]);
+    const viaGen = await api.editImage({ ...editOpts, image: undefined, images: twoRefs });
+    const genBody = JSON.parse(String(calls[1].init.body));
+    check(String(genBody.image).startsWith('data:image/png;base64,'), '退路把第一张编成 data URI 放进 image', String(genBody.image).slice(0, 30));
+    check(Array.isArray(genBody.images) && genBody.images.length === 2, '退路同时把全量放进 images（兼容端点能收）');
+    check(String(viaGen.notice).includes('只认第一张'), '退路在回执上说明后面几张没参与', String(viaGen.notice));
+
+    let noRef = null;
+    try {
+      await api.editImage({ baseUrl: 'https://img.example.test/v1', apiKey: 'sk-x', prompt: 'x' });
+    } catch (err) {
+      noRef = err;
+    }
+    check(noRef && noRef.status === 400 && String(noRef.message).includes('没给参考图'), '一张参考图都没给时直接抛，别发空请求');
+
     // 7. 世界层：云端那档 + 认不出的 size，回执照实说一句（以前是静默按默认尺寸出图）。
     const cloudWorld = definition.create({
       cfg: {
@@ -597,6 +627,22 @@ try {
     calls = stubFetch([['/images/generations', () => jsonResponse({ data: [{ b64_json: tinyB64 }] })]]);
     const drewOdd = await cloudWorld.tools().find((t) => t.name === 'image_draw').handler({ prompt: '猫', size: '怪尺寸' });
     check(drewOdd && !drewOdd.failed, '云端那档能出图', JSON.stringify(drewOdd).slice(0, 100));
+
+    // 8. 世界层：多张参考图（image_edit 的 images）——两张都交给云端，回执照实说用了两张。
+    const refA = join(dataDir, 'ref-a.png');
+    const refB = join(dataDir, 'ref-b.png');
+    writeFileSync(refA, tinyPng);
+    writeFileSync(refB, tinyPng);
+    calls = stubFetch([['/images/edits', () => jsonResponse({ data: [{ b64_json: tinyB64 }] })]]);
+    const multiEdit = await cloudWorld.tools().find((t) => t.name === 'image_edit').handler({ prompt: '合在一起', images: [refA, refB] });
+    check(multiEdit && !multiEdit.failed, '多张参考图能改图', JSON.stringify(multiEdit).slice(0, 120));
+    check(String(multiEdit.text).includes('用了 2 张参考图'), '回执点名用了几张参考图', String(multiEdit.text).split('\n')[0]);
+    check(calls[0]?.init?.body instanceof FormData && calls[0].init.body.getAll('image[]').length === 2, '两张参考图都进了 multipart（image[]）');
+
+    calls = stubFetch([['/images/edits', () => jsonResponse({ error: { message: 'only one image' } }, 400)]]);
+    const multiRejected = await cloudWorld.tools().find((t) => t.name === 'image_edit').handler({ prompt: '合在一起', images: [refA, refB] });
+    check(multiRejected?.failed === true, '端点不吃多图时如实失败');
+    check(/400|only one image/.test(String(multiRejected.text)), '失败文案里带上端点原话/状态码', String(multiRejected.text).split('\n').slice(0, 2).join(' '));
     check(String(drewOdd.text).includes('不认 size'), '认不出的 size 在回执里说了一句，不是静默', String(drewOdd.text).split('\n')[2]);
   } finally {
     globalThis.fetch = realFetch;
@@ -997,6 +1043,29 @@ try {
   const applied = comfy.applyVars({ a: '{{prompt}}', b: ['{{seed}}', 3], c: 'x {{ nope }} y' }, { prompt: '猫', seed: 42 });
   check(applied.a === '猫' && applied.b[0] === 42 && applied.c === 'x {{ nope }} y', '模板变量替换：认识的换成值、不认识的留着', JSON.stringify(applied));
 
+  // 自定义工作流：整份 API JSON 贴进来
+  const wfRaw = {
+    3: { class_type: 'KSampler', inputs: { seed: '{{seed}}', steps: '{{steps}}', positive: ['5', 0] } },
+    5: { class_type: 'CLIPTextEncode', inputs: { text: '{{prompt}}' } },
+  };
+  const nw = comfy.normalizeWorkflow(JSON.stringify(wfRaw));
+  check(!nw.error && nw.workflow?.['3']?.inputs.seed === '{{seed}}', '自定义工作流：字符串 JSON 能收下且原样保留占位符', nw.error);
+  check(nw.warnings.length === 0, '自定义工作流：占位符都认识时不报警', JSON.stringify(nw.warnings));
+  const nwWrapped = comfy.normalizeWorkflow({ prompt: wfRaw, client_id: 'abc' });
+  check(!nwWrapped.error && nwWrapped.workflow?.['5'], '自定义工作流：{prompt:{…}, client_id} 这种外壳会自动剥掉', nwWrapped.error);
+  const nwUi = comfy.normalizeWorkflow({ nodes: [], links: [] });
+  check(/界面格式|Save \(API Format\)/.test(nwUi.error), '自定义工作流：界面格式（nodes/links）直接拒，并告诉去哪另存', nwUi.error);
+  check(/class_type/.test(comfy.normalizeWorkflow({ 1: { inputs: {} } }).error), '自定义工作流：缺 class_type 报错');
+  check(/不是数组/.test(comfy.normalizeWorkflow([]).error), '自定义工作流：最外层是数组报错');
+  const nwAlias = comfy.normalizeWorkflow({ 1: { class_type: 'KSampler', inputs: { text: '{{promptText}}' } } });
+  check(nwAlias.warnings.some((w) => w.includes('promptText') && w.includes('prompt')), '自定义工作流：不认识的占位符给出最接近的名字', JSON.stringify(nwAlias.warnings));
+  const nwBadLink = comfy.normalizeWorkflow({ 1: { class_type: 'KSampler', inputs: { model: ['9', 0] } } });
+  check(nwBadLink.warnings.some((w) => w.includes('9')), '自定义工作流：连线指向不存在的节点会提醒', JSON.stringify(nwBadLink.warnings));
+  const nwEmpty = comfy.normalizeWorkflow({ 1: { class_type: 'PreviewImage', inputs: {} } });
+  check(nwEmpty.warnings.some((w) => w.includes('{{')), '自定义工作流：没有任何占位符会提醒（全用模板里写死的值）', JSON.stringify(nwEmpty.warnings));
+  const stats = comfy.workflowStats(nw.workflow);
+  check(stats.nodes === 2 && stats.samplers === 1, '自定义工作流：统计节点数与采样器数', JSON.stringify(stats));
+
   section('ComfyUI 整条链路（stub fetch）');
   const comfyCalls = [];
   // 一张 1600×1200 的「PNG」：图生图该照着它的比例出图，不该拉成方图。
@@ -1098,6 +1167,42 @@ try {
       '裸 UNet 也能图生图（UNETLoader + LoadImage + denoise）',
       Object.values(unetEditWf).map((n) => n.class_type).join(','),
     );
+
+    // 多图：内置的图生图只带得动一张，多张时要说清「这档得写自定义工作流」。
+    stubComfy();
+    comfyCalls.length = 0;
+    let manyErr = null;
+    try {
+      await comfy.comfyEdit({ baseUrl: 'http://comfy.test', ckpt: 'ck.safetensors', prompt: '合在一起', images: [comfyPng, comfyPng], timeoutMs: 8000 });
+    } catch (err) {
+      manyErr = err;
+    }
+    check(
+      manyErr?.status === 400 && String(manyErr.message).includes('自定义工作流'),
+      '本地这档不吃多图时报错直接指路「自定义工作流」',
+      String(manyErr?.message),
+    );
+
+    // 自定义工作流吃多图：{{image1}}/{{image2}} 各换成上传后的文件名，图传两次。
+    comfyCalls.length = 0;
+    const wfMulti = {
+      1: { class_type: 'LoadImage', inputs: { image: '{{image1}}' } },
+      2: { class_type: 'LoadImage', inputs: { image: '{{image2}}' } },
+      3: { class_type: 'ImageBatch', inputs: { image1: ['1', 0], image2: ['2', 0] } },
+      4: { class_type: 'SaveImage', inputs: { images: ['3', 0], filename_prefix: '{{prefix}}' } },
+    };
+    const multiComfy = await comfy.comfyEdit({
+      baseUrl: 'http://comfy.test',
+      prompt: '合在一起',
+      images: [comfyPng, comfyPng],
+      workflow: wfMulti,
+      timeoutMs: 8000,
+    });
+    check(multiComfy.bytes.equals(comfyPng), '自定义工作流 + 两张参考图能出图');
+    check(comfyCalls.filter((c) => c.path === '/upload/image').length === 2, '两张参考图都先上传到 input/');
+    const multiWf = JSON.parse(comfyCalls.filter((c) => c.path === '/prompt').at(-1).body).prompt;
+    check(!JSON.stringify(multiWf).includes('{{'), '提交前占位符全部换掉了', JSON.stringify(multiWf['1']));
+    check(multiWf['1'].inputs.image === 'uploaded.png' && multiWf['2'].inputs.image === 'uploaded.png', '两处 LoadImage 都换成了上传后的文件名');
 
     stubComfy({ prompt: () => jsonResponse({ error: { type: 'invalid_prompt' }, node_errors: { 4: { errors: [{ message: 'ckpt_name not in list' }] } } }, 400) });
     let comfyErr = null;
@@ -1430,6 +1535,78 @@ try {
       && advEntry?.vaeName === 'qwen_image_vae.safetensors',
     '裸 UNet 三件套与编码器类型也存进那一档',
     JSON.stringify({ unet: advEntry?.unet, te: advEntry?.textEncoder, type: advEntry?.textEncoderType, vae: advEntry?.vaeName }),
+  );
+
+  // 「工作流」：本地 ComfyUI 档才有，能粘 API 格式 JSON、校验、保存、清空
+  // （保存会 await load() 从真状态重读一遍，所以这里先自己加一档本地档）
+  findByText(chainRoot, '＋ 本地 ComfyUI')?.click();
+  await tick(30);
+  const comfyRow2 = chainRowsOf().filter((row) => chainKindOfRow(row)?.value === 'comfyui').at(-1);
+  check(!!comfyRow2, '加出的本地档在行里');
+  const comfy2Inputs = chainInputsOf(comfyRow2);
+  comfy2Inputs[2].value = 'sd_xl_base_1.0.safetensors';
+  fire(comfy2Inputs[2], 'input');
+  check(!!findByText(comfyRow2, '工作流'), '本地 ComfyUI 档有「工作流」按钮');
+  findByText(comfyRow2, '工作流')?.click();
+  await tick(30);
+  const wfBoxes = findAll(chainRoot, (el) => String(el.className).split(/\s+/).includes('iw-chainadv'));
+  const wfBox = wfBoxes
+    .filter((el) => walk(el).some((it) => String(it.textContent ?? '').includes('自定义工作流')))
+    .at(-1);
+  check(!!wfBox, '点「工作流」展开弹窗');
+  check(!!wfBox && walk(wfBox).some((el) => String(el.textContent ?? '').includes('Save (API Format)')), '弹窗里说清 JSON 从哪来');
+  const wfArea = wfBox ? findAll(wfBox, (el) => el.tagName === 'TEXTAREA')[0] : null;
+  check(!!wfArea, '弹窗里是粘 JSON 的大框');
+  const wfText = () => (wfBox ? walk(wfBox).map((el) => String(el.textContent ?? '')).join('\n') : '');
+
+  wfArea.value = '{"1":{"class_type":"LoadImage","inputs":{"image":"{{image1}}"}},"2":{"class_type":"SaveImage","inputs":{"images":["1",0]}}}';
+  fire(wfArea, 'input');
+  findByText(wfBox, '校验')?.click();
+  await tick(30);
+  check(/看着能跑：2 个节点/.test(wfText()), '校验通过时说出几个节点', wfText().split('\n').filter((it) => it.includes('看着能跑')).join(''));
+
+  wfArea.value = '{"nodes":[],"links":[]}';
+  fire(wfArea, 'input');
+  findByText(wfBox, '校验')?.click();
+  await tick(30);
+  check(/Save \(API Format\)/.test(wfText()), '粘成界面格式时直接指路 API Format', wfText().split('\n').filter((it) => it.includes('API')).join(''));
+
+  wfArea.value = '{"1":{"class_type":"LoadImage","inputs":{"image":"{{image1}}"}},"2":{"class_type":"SaveImage","inputs":{"images":["1",0]}}}';
+  fire(wfArea, 'input');
+  const wfBox2 = () => findAll(chainRoot, (el) => String(el.className).split(/\s+/).includes('iw-chainadv'))
+    .filter((el) => walk(el).some((it) => String(it.textContent ?? '').includes('自定义工作流'))).at(-1);
+  findByText(wfBox2(), '保存工作流')?.click();
+  await tick(30);
+  // 存进内存后重画：行上挂标、弹窗里回填已存的那份
+  const badged = walk(chainRoot).some((el) => String(el.textContent ?? '').includes('已用自定义工作流'));
+  check(badged, '打过工作流的档在行里挂个标');
+  const reopenedArea = findAll(wfBox2() ?? chainRoot, (el) => el.tagName === 'TEXTAREA')[0];
+  check(String(reopenedArea?.value ?? '').includes('class_type'), '重画后弹窗回填已存的工作流');
+
+  findByText(wfBox2() ?? chainRoot, '清空')?.click();
+  await tick(30);
+  const clearedArea = findAll(wfBox2() ?? chainRoot, (el) => el.tagName === 'TEXTAREA')[0];
+  check(String(clearedArea?.value ?? '').trim() === '', '「清空」把框清空', JSON.stringify(clearedArea?.value));
+
+  // 再粘一次并保存，落进 config 才算真的存住了
+  const persistArea = findAll(wfBox2() ?? chainRoot, (el) => el.tagName === 'TEXTAREA')[0];
+  persistArea.value = '{"1":{"class_type":"LoadImage","inputs":{"image":"{{image1}}"}},"2":{"class_type":"SaveImage","inputs":{"images":["1",0]}}}';
+  fire(persistArea, 'input');
+  findByText(wfBox2() ?? chainRoot, '保存工作流')?.click();
+  await tick(30);
+  findByText(chainRoot, '保存模型链')?.click();
+  await tick(40);
+  let wfSaved = null;
+  try {
+    wfSaved = JSON.parse(chainEnv.state.configWrites.at(-1)?.values?.['worlds.image.models'] ?? '');
+  } catch {
+    wfSaved = null;
+  }
+  const wfEntrySaved = Array.isArray(wfSaved) ? wfSaved.find((it) => it.preset === 'comfyui' && it.workflow) : null;
+  check(
+    !!wfEntrySaved?.workflow['1'] && !!wfEntrySaved?.workflow['2'],
+    '工作流 JSON 存进那一档的 workflow 字段',
+    JSON.stringify(Object.keys(wfEntrySaved?.workflow ?? {})),
   );
 
   // 再补一档空的本地档，验证缺 ckpt 时保存被拦

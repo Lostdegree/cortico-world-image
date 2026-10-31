@@ -445,7 +445,8 @@ function unetGraph(opts, { width, height, image }) {
 /**
  * 自定义工作流模板的占位符替换：`"{{prompt}}"` 整串等于占位符时直接换成对应**类型**的值，
  * 其余字符串里做文本插值；认不出的占位符原样留着（方便人肉排查）。
- */export function applyVars(node, vars) {
+ */
+export function applyVars(node, vars) {
   if (typeof node === 'string') {
     const exact = /^\{\{\s*([\w.-]+)\s*\}\}$/.exec(node);
     if (exact && Object.prototype.hasOwnProperty.call(vars, exact[1])) return vars[exact[1]];
@@ -464,8 +465,118 @@ function unetGraph(opts, { width, height, image }) {
 export const WORKFLOW_VARS = [
   'prompt', 'negative', 'ckpt', 'unet', 'textEncoder', 'textEncoderType', 'vaeName',
   'width', 'height', 'size', 'steps', 'cfg',
-  'sampler', 'scheduler', 'seed', 'denoise', 'image', 'loras', 'prefix', 'filename',
+  'sampler', 'scheduler', 'seed', 'denoise', 'image', 'image1', 'image2', 'image3', 'image4',
+  'images', 'loras', 'prefix', 'filename', 'note',
 ];
+
+/** 常见拼错/别名的占位符 → 正确的那个，用来在提示里直接点出来。 */
+const VAR_ALIASES = {
+  negativePrompt: 'negative', negative_prompt: 'negative', positive: 'prompt', promptText: 'prompt',
+  step: 'steps', steps_count: 'steps', cfgScale: 'cfg', cfg_scale: 'cfg',
+  ckptName: 'ckpt', checkpoint: 'ckpt', unetName: 'unet', vae: 'vaeName', vaeFile: 'vaeName',
+  clip: 'textEncoder', clipName: 'textEncoder', lora: 'loras', loraString: 'loras',
+  img: 'image', photo: 'image', picture: 'image', seedValue: 'seed', noise: 'denoise',
+};
+
+/** 把模板里出现的 `{{…}}` 全扫出来（字符串里做插值，别的地方原样）。 */
+function scanPlaceholders(node, found = new Set()) {
+  if (typeof node === 'string') {
+    for (const hit of node.matchAll(/\{\{\s*([\w.-]+)\s*\}\}/g)) found.add(hit[1]);
+  } else if (Array.isArray(node)) {
+    for (const item of node) scanPlaceholders(item, found);
+  } else if (node && typeof node === 'object') {
+    for (const value of Object.values(node)) scanPlaceholders(value, found);
+  }
+  return found;
+}
+
+/**
+ * 把用户从 ComfyUI「Save (API Format)」里粘出来的工作流整成能直接提交的节点表。
+ *
+ * 认三种写法：纯节点表 `{"3": {"class_type": …, "inputs": …}}`、`/prompt` 的请求体
+ * `{"prompt": {…}, "client_id": …}`（自动剥掉外壳）、以及……不认 UI 格式（带 `nodes`/`links`），
+ * 那份要拿去 ComfyUI 里另存 API 格式，所以直接给出人话。
+ *
+ * 永远返回 `{ workflow, error, warnings }`，不抛：面板要能当场把错处说清楚。
+ */
+export function normalizeWorkflow(raw) {
+  const empty = (error) => ({ workflow: null, error, warnings: [] });
+  if (raw === null || raw === undefined || raw === '') {
+    return empty('工作流是空的：先在 ComfyUI 里把流程跑通，用 ⚙ 菜单的「Save (API Format)」存一份，再把 JSON 整份贴进来。');
+  }
+  let value = raw;
+  if (typeof raw === 'string') {
+    const text = raw.trim();
+    if (!text) return empty('工作流是空的：把 ComfyUI 导出的 API JSON 整份贴进来。');
+    try {
+      value = JSON.parse(text);
+    } catch (err) {
+      return empty(`这份 JSON 有语法错（${String(err?.message ?? err)}）。注释、行尾省略号、中文引号、多粘了一层括号都会让它解析不了。`);
+    }
+  }
+  if (Array.isArray(value)) return empty('最外层应该是对象（节点 id → 节点），不是数组。');
+  if (!value || typeof value !== 'object') return empty('最外层应该是一个 JSON 对象。');
+
+  // `/prompt` 的请求体外壳：{ prompt: {...}, client_id: "..." }
+  if (value.prompt && typeof value.prompt === 'object' && !Array.isArray(value.prompt) && !('class_type' in value)) {
+    value = value.prompt;
+  }
+  if (Array.isArray(value.nodes) && (Array.isArray(value.links) || Array.isArray(value.last_node_id))) {
+    return empty('这是 ComfyUI 的「界面格式」（带 nodes / links），提交不了。在 ComfyUI 里用 ⚙ 菜单的「Save (API Format)」另存一份，贴那一份。');
+  }
+
+  const warnings = [];
+  const nodes = {};
+  for (const [id, node] of Object.entries(value)) {
+    if (id === 'client_id' || id === 'extra_data' || id === 'number' || id === 'front') continue;
+    if (!node || typeof node !== 'object' || Array.isArray(node)) {
+      return empty(`节点 ${id} 不是对象——工作流里每个键都该是「节点 id → {class_type, inputs}」。`);
+    }
+    const classType = String(node.class_type ?? '').trim();
+    if (!classType) return empty(`节点 ${id} 没有 class_type——多半是粘了 UI 格式或别的 JSON。`);
+    const inputs = node.inputs ?? {};
+    if (!inputs || typeof inputs !== 'object' || Array.isArray(inputs)) {
+      return empty(`节点 ${id}（${classType}）的 inputs 不是对象。`);
+    }
+    nodes[id] = { ...(node._meta ? { _meta: node._meta } : {}), class_type: classType, inputs };
+  }
+  if (!Object.keys(nodes).length) return empty('一个节点都没有：粘进来的这份不是工作流。');
+
+  // 连线必须是 ["<节点id>", 输出序号]
+  for (const [id, node] of Object.entries(nodes)) {
+    for (const [field, val] of Object.entries(node.inputs)) {
+      if (!Array.isArray(val) || val.length !== 2) continue;
+      if (typeof val[0] === 'string' && Number.isInteger(val[1])) {
+        if (!nodes[val[0]]) warnings.push(`节点 ${id} 的 ${field} 指向节点 ${val[0]}，但模板里没有它。`);
+      } else if (typeof val[0] === 'number') {
+        warnings.push(`节点 ${id} 的 ${field} 是 [${val[0]}, ${val[1]}]，看着像 UI 格式的连线——提交时第一个值必须是节点 id 字符串。`);
+      }
+    }
+  }
+
+  const used = [...scanPlaceholders(nodes)];
+  for (const name of used) {
+    if (WORKFLOW_VARS.includes(name) || /^image\d+$/.test(name)) continue;
+    const guess = VAR_ALIASES[name];
+    warnings.push(`占位符 {{${name}}} 不认识${guess ? `（是不是想写 {{${guess}}}？）` : ''}；它会原样留在提交的工作流里。`);
+  }
+  if (!used.length) {
+    warnings.push('模板里没有 {{…}} 占位符：提示词、尺寸、种子都会用模板里写死的值，改一句话要回去改 JSON。');
+  }
+  return { workflow: nodes, error: '', warnings };
+}
+
+/** 面板与回执里的一行摘要：几个节点、几个采样器、几个 LoadImage、会不会存图。 */
+export function workflowStats(workflow) {
+  const nodes = workflow && typeof workflow === 'object' ? Object.values(workflow) : [];
+  const count = (...names) => nodes.filter((node) => names.includes(String(node?.class_type ?? ''))).length;
+  return {
+    nodes: nodes.length,
+    samplers: count('KSampler', 'KSamplerAdvanced', 'SamplerCustom', 'KSamplerSelect'),
+    images: count('LoadImage'),
+    saves: count('SaveImage', 'PreviewImage'),
+  };
+}
 
 // ---------------------------------------------------------------------------
 // 提交 / 轮询 / 取图
@@ -753,29 +864,49 @@ export async function comfyDraw(opts = {}) {
  */
 export async function comfyEdit(opts = {}) {
   const timeoutMs = Number(opts.timeoutMs) > 0 ? Number(opts.timeoutMs) : 300000;
-  // 没指定尺寸就跟着参考图的比例走（最长边 1536），别一律拉成方图。
-  const size = imageToSize(opts.image, opts.size);
+  // 参考图可以多张：内置工作流只有一张的位子，多张必须靠自定义模板里的 {{image1}}/{{image2}}…
+  const refs = Array.isArray(opts.images) && opts.images.length
+    ? opts.images
+      .filter((it) => it && (it.bytes || Buffer.isBuffer(it)))
+      .map((it) => (Buffer.isBuffer(it) ? { bytes: it, mime: opts.mime, name: opts.name } : it))
+    : opts.image ? [{ bytes: opts.image, mime: opts.mime, name: opts.name }] : [];
+  if (!refs.length) throw new ComfyError('没给参考图：image 或 images 至少给一个。', { status: 400 });
+  if (refs.length > 1 && !opts.workflow) {
+    throw new ComfyError(
+      `这一档用的是内置图生图工作流，只有一个 LoadImage，装不下 ${refs.length} 张参考图。`
+      + '两种办法：① 在这一档贴一份带多个 LoadImage 的自定义工作流（用 {{image1}}、{{image2}} 占位）；'
+      + '② 先把几张拼成一张再让我改。',
+      { status: 400 },
+    );
+  }
+  // 没指定尺寸就跟着第一张参考图的比例走（最长边 1536），别一律拉成方图。
+  const size = imageToSize(refs[0].bytes, opts.size);
   const { width, height } = sizeToWH(size);
-  const uploaded = await uploadImage(
-    opts.baseUrl,
-    { bytes: opts.image, mime: opts.mime, name: opts.name ?? 'coopanion.png' },
-    { timeoutMs: Math.min(timeoutMs, 60000) },
-  );
+  const uploaded = [];
+  for (const [index, ref] of refs.entries()) {
+    uploaded.push(await uploadImage(
+      opts.baseUrl,
+      { bytes: ref.bytes, mime: ref.mime, name: ref.name ?? `coopanion-${index + 1}.png` },
+      { timeoutMs: Math.min(timeoutMs, 60000) },
+    ));
+  }
   const shaped = { ...opts, size };
   const workflow = opts.workflow
-    ? applyVars(opts.workflow, workflowVars(shaped, { width, height, image: uploaded, filename: uploaded }))
+    ? applyVars(opts.workflow, workflowVars(shaped, { width, height, images: uploaded }))
     : opts.unet
-      ? unetImg2ImgWorkflow({ ...shaped, image: uploaded })
-      : img2ImgWorkflow({ ...shaped, image: uploaded });
+      ? unetImg2ImgWorkflow({ ...shaped, image: uploaded[0] })
+      : img2ImgWorkflow({ ...shaped, image: uploaded[0] });
   const promptId = await submitPrompt(opts.baseUrl, workflow, { timeoutMs: Math.min(timeoutMs, 30000) });
   const picked = await waitForImages(opts.baseUrl, promptId, { timeoutMs, onTick: opts.onTick });
   const { bytes, mime } = await fetchImage(opts.baseUrl, picked, { timeoutMs: Math.min(timeoutMs, 60000) });
   return { bytes, mime: sniffMime(bytes) ?? mime, revisedPrompt: null, promptId, image: picked, size: `${width}x${height}` };
 }
 
-/** 自定义模板里的占位符取值。 */
-function workflowVars(opts, { width, height, image, filename }) {
+/** 自定义模板里的占位符取值。`images` 是已经上传到 ComfyUI `input/` 的文件名数组。 */
+function workflowVars(opts, { width, height, images = [] }) {
   const loras = parseLoras(opts.loras);
+  const list = images.map((name) => String(name)).filter(Boolean);
+  const first = list[0] ?? '';
   return {
     prompt: String(opts.prompt ?? ''),
     negative: String(opts.negative ?? DEFAULT_NEGATIVE),
@@ -793,8 +924,14 @@ function workflowVars(opts, { width, height, image, filename }) {
     scheduler: String(opts.scheduler ?? 'normal'),
     seed: Math.max(0, Math.floor(finite(Number(opts.seed), Math.random() * 2 ** 31))),
     denoise: finite(Number(opts.denoise), 0.6),
-    image,
-    filename,
+    image: first,
+    filename: first,
+    image1: list[0] ?? '',
+    image2: list[1] ?? '',
+    image3: list[2] ?? '',
+    image4: list[3] ?? '',
+    images: list.join(','),
+    note: String(opts.note ?? ''),
     loras: loras.map((l) => `${l.name}:${l.strength}`).join(','),
     prefix: String(opts.prefix ?? 'coopanion'),
   };

@@ -49,15 +49,24 @@ export const TOOL_SPECS = [
   },
   {
     name: 'image_edit',
-    description: 'Redraw an existing local picture following a text instruction, through the same model chain as image_draw. '
-      + '`image` takes an absolute file path, or a picture id from image_gallery. '
-      + 'OpenAI-compatible entries use /images/edits (multipart upload) or a base64 `image` field on /images/generations (e.g. Aliyun Bailian); ComfyUI entries upload the picture and run an img2img workflow.',
+    description: 'Redraw existing local picture(s) following a text instruction, through the same model chain as image_draw. '
+      + '`image` takes one absolute file path (or a picture id from image_gallery); `images` takes several for models that accept multiple references. '
+      + 'OpenAI-compatible entries use /images/edits (multipart upload, several pictures as image[]) or a base64 `image` field on /images/generations (e.g. Aliyun Bailian, one picture only); '
+      + 'ComfyUI entries upload the picture(s) and run an img2img workflow — several pictures need a custom workflow with {{image1}} / {{image2}} placeholders.',
     tags: ['act'],
     parameters: {
       type: 'object',
       properties: {
         prompt: { type: 'string', description: 'What to change or how to restyle it.' },
         image: { type: 'string', description: 'Absolute path of the source picture, or a picture id from image_gallery.' },
+        images: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'Several source pictures, same notation as `image` (absolute path or gallery id), up to 4. '
+            + 'Use it when the instruction refers to more than one picture ("把这两张拼起来", "照这个风格改那张"). '
+            + 'If the chosen backend cannot take several references, the tool says so instead of quietly dropping them.',
+        },
         model: { type: 'string', description: 'Optional chain entry name. Leave empty to try the chain in priority order.' },
         note: { type: 'string', description: 'Short label for the result in the studio list.' },
         size: {
@@ -68,11 +77,11 @@ export const TOOL_SPECS = [
         },
         quality: { type: 'string', description: 'Override the configured quality. Ignored by ComfyUI.' },
       },
-      required: ['prompt', 'image'],
+      required: ['prompt'],
     },
     summary: {
-      zh: '按一句指令改一张已有的本地图，结果同样落盘并贴进对话。',
-      en: 'Redraw an existing local picture following a text instruction.',
+      zh: '按一句指令改已有的本地图（一张或多张参考图），结果同样落盘并贴进对话；后端吃不下多图时直说。',
+      en: 'Redraw existing local picture(s) following a text instruction; says so when the backend cannot take several references.',
     },
   },
   {

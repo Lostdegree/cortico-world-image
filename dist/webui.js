@@ -113,6 +113,18 @@ const ZH = {
   chainAdvTextEncoder: '文本编码器，如 qwen_3_06b_base.safetensors',
   chainAdvTextEncoderType: '编码器类型',
   chainAdvVae: 'VAE，如 qwen_image_vae.safetensors',
+  chainWf: '工作流',
+  chainWfTitle: '自定义工作流',
+  chainWfClose: '收起',
+  chainWfHint: '把 ComfyUI 里 ⚙ →「Save (API Format)」存出来的 JSON 整份贴进来，占位符用双大括号：{{prompt}} {{negative}} {{width}} {{height}} {{steps}} {{cfg}} {{sampler}} {{scheduler}} {{seed}} {{denoise}} {{image1}}…{{image4}} {{ckpt}} {{unet}} {{textEncoder}} {{vaeName}} {{loras}}。不用自定义工作流就留空，插件会用内置的 txt2img / img2img。',
+  chainWfPlaceholder: '{ "3": { "class_type": "KSampler", "inputs": { "seed": "{{seed}}", "steps": "{{steps}}", "cfg": "{{cfg}}", "sampler_name": "{{sampler}}", "scheduler": "{{scheduler}}", "denoise": "{{denoise}}", "model": ["4", 0], "positive": ["6", 0], "negative": ["7", 0], "latent_image": ["5", 0] } }, … }',
+  chainWfCheck: '校验',
+  chainWfSave: '保存工作流',
+  chainWfClear: '清空',
+  chainWfOn: '已用自定义工作流',
+  chainWfOk: '看着能跑：{n} 个节点 · {s} 个采样器 · {i} 个 LoadImage。',
+  chainWfWarn: '能存，但这些占位符不认识，会被当成字面量：{list}',
+  chainWfEmpty: '不用自定义工作流就留空——插件会用内置的 txt2img / img2img 流程。',
   chainUnetInAdv: '已用高级参数里的裸 UNet',
   chainNeedUnetParts: '裸 UNet 还差文本编码器 / VAE',
   chainJson: '高级：JSON',
@@ -235,6 +247,18 @@ const EN = {
   chainAdvTextEncoder: 'Text encoder, e.g. qwen_3_06b_base.safetensors',
   chainAdvTextEncoderType: 'encoder type',
   chainAdvVae: 'VAE, e.g. qwen_image_vae.safetensors',
+  chainWf: 'Workflow',
+  chainWfTitle: 'Custom workflow',
+  chainWfClose: 'Hide',
+  chainWfHint: 'Paste the whole JSON saved from ComfyUI with ⚙ → "Save (API Format)". Placeholders use double braces: {{prompt}} {{negative}} {{width}} {{height}} {{steps}} {{cfg}} {{sampler}} {{scheduler}} {{seed}} {{denoise}} {{image1}}…{{image4}} {{ckpt}} {{unet}} {{textEncoder}} {{vaeName}} {{loras}}. Leave it empty to use the built-in txt2img / img2img graphs.',
+  chainWfPlaceholder: '{ "3": { "class_type": "KSampler", "inputs": { "seed": "{{seed}}", "steps": "{{steps}}", "cfg": "{{cfg}}", "sampler_name": "{{sampler}}", "scheduler": "{{scheduler}}", "denoise": "{{denoise}}", "model": ["4", 0], "positive": ["6", 0], "negative": ["7", 0], "latent_image": ["5", 0] } }, … }',
+  chainWfCheck: 'Check',
+  chainWfSave: 'Save workflow',
+  chainWfClear: 'Clear',
+  chainWfOn: 'Custom workflow on',
+  chainWfOk: 'Looks runnable: {n} nodes · {s} samplers · {i} LoadImage.',
+  chainWfWarn: 'Saves, but these placeholders are unknown and will stay literal: {list}',
+  chainWfEmpty: 'Leave empty to use the built-in txt2img / img2img graphs.',
   chainUnetInAdv: 'using the bare UNet from Advanced',
   chainNeedUnetParts: 'bare UNet still needs a text encoder / VAE',
   chainJson: 'Advanced: JSON',
@@ -380,6 +404,101 @@ function chainLorasSet(entry, list) {
   }
   if (out.length) entry.loras = out;
   else delete entry.loras;
+}
+
+/** 自定义工作流能认的占位符（与 src/comfyui.js 的 WORKFLOW_VARS 同一口径）。 */
+const WF_VARS = new Set([
+  'prompt', 'negative', 'ckpt', 'unet', 'textEncoder', 'textEncoderType', 'vaeName',
+  'width', 'height', 'size', 'steps', 'cfg',
+  'sampler', 'scheduler', 'seed', 'denoise', 'image', 'image1', 'image2', 'image3', 'image4',
+  'images', 'loras', 'prefix', 'filename', 'note',
+]);
+const WF_ALIASES = {
+  negativePrompt: 'negative', negative_prompt: 'negative', positive: 'prompt', promptText: 'prompt',
+  step: 'steps', steps_count: 'steps', cfgScale: 'cfg', cfg_scale: 'cfg',
+  ckptName: 'ckpt', checkpoint: 'ckpt', unetName: 'unet', vae: 'vaeName', vaeFile: 'vaeName',
+  clip: 'textEncoder', clipName: 'textEncoder', lora: 'loras', loraString: 'loras',
+  img: 'image', photo: 'image', picture: 'image', seedValue: 'seed', noise: 'denoise',
+};
+
+function scanWfPlaceholders(node, found) {
+  if (typeof node === 'string') {
+    for (const hit of node.matchAll(/\{\{\s*([\w.-]+)\s*\}\}/g)) found.add(hit[1]);
+  } else if (Array.isArray(node)) {
+    for (const item of node) scanWfPlaceholders(item, found);
+  } else if (node && typeof node === 'object') {
+    for (const value of Object.values(node)) scanWfPlaceholders(value, found);
+  }
+  return found;
+}
+
+/**
+ * 面板侧的「这份工作流能不能跑」：规则与 src/comfyui.js 的 normalizeWorkflow 一致，
+ * 返回 `{ workflow, error, warnings, stats }`，从不抛。
+ */
+function checkWorkflowJson(raw) {
+  const fail = (error) => ({ workflow: null, error, warnings: [], stats: { nodes: 0, samplers: 0, images: 0 } });
+  // 传进来的可能是文本框里的字符串，也可能是已经存好的对象（行里的「已用」标要用）
+  const asObject = raw && typeof raw === 'object' ? raw : null;
+  const text = asObject ? '' : String(raw ?? '').trim();
+  if (!text && !asObject) return { workflow: null, error: '', warnings: [], stats: { nodes: 0, samplers: 0, images: 0 }, empty: true };
+  let value;
+  if (asObject) {
+    value = asObject;
+  } else {
+    try {
+      value = JSON.parse(text);
+    } catch (err) {
+      return fail(`JSON 解析失败：${String(err?.message ?? err)}。注释、行尾省略号、中文引号都会让它解析不了。`);
+    }
+  }
+  if (Array.isArray(value)) return fail('最外层应该是对象（节点 id → 节点），不是数组。');
+  if (!value || typeof value !== 'object') return fail('最外层应该是一个 JSON 对象。');
+  if (value.prompt && typeof value.prompt === 'object' && !Array.isArray(value.prompt) && !('class_type' in value)) value = value.prompt;
+  if (Array.isArray(value.nodes) && (Array.isArray(value.links) || Array.isArray(value.last_node_id))) {
+    return fail('这是 ComfyUI 的「界面格式」（带 nodes / links），提交不了。用 ⚙ 菜单的「Save (API Format)」另存一份贴进来。');
+  }
+  const warnings = [];
+  const nodes = {};
+  for (const [id, node] of Object.entries(value)) {
+    if (id === 'client_id' || id === 'extra_data' || id === 'number' || id === 'front') continue;
+    if (!node || typeof node !== 'object' || Array.isArray(node)) return fail(`节点 ${id} 不是对象——每个键都该是「节点 id → {class_type, inputs}」。`);
+    const classType = String(node.class_type ?? '').trim();
+    if (!classType) return fail(`节点 ${id} 没有 class_type——多半是粘了别的 JSON。`);
+    const inputs = node.inputs ?? {};
+    if (!inputs || typeof inputs !== 'object' || Array.isArray(inputs)) return fail(`节点 ${id}（${classType}）的 inputs 不是对象。`);
+    nodes[id] = { class_type: classType, inputs };
+  }
+  const ids = Object.keys(nodes);
+  if (!ids.length) return fail('一个节点都没有：粘进来的这份不是工作流。');
+  for (const [id, node] of Object.entries(nodes)) {
+    for (const [field, val] of Object.entries(node.inputs)) {
+      if (!Array.isArray(val) || val.length !== 2) continue;
+      if (typeof val[0] === 'string' && Number.isInteger(val[1])) {
+        if (!nodes[val[0]]) warnings.push(`节点 ${id} 的 ${field} 指向节点 ${val[0]}，模板里没有它。`);
+      } else if (typeof val[0] === 'number') {
+        warnings.push(`节点 ${id} 的 ${field} 是 [${val[0]}, ${val[1]}]，看着像界面格式的连线——第一个值必须是节点 id 字符串。`);
+      }
+    }
+  }
+  const used = [...scanWfPlaceholders(nodes, new Set())];
+  for (const name of used) {
+    if (WF_VARS.has(name) || /^image\d+$/.test(name)) continue;
+    const guess = WF_ALIASES[name];
+    warnings.push(`占位符 {{${name}}} 不认识${guess ? `（是不是想写 {{${guess}}}？）` : ''}；它会原样留在提交的工作流里。`);
+  }
+  if (!used.length) warnings.push('模板里没有 {{…}} 占位符：提示词、尺寸、种子都用模板里写死的值。');
+  const count = (...names) => Object.values(nodes).filter((n) => names.includes(n.class_type)).length;
+  return {
+    workflow: nodes,
+    error: '',
+    warnings,
+    stats: {
+      nodes: ids.length,
+      samplers: count('KSampler', 'KSamplerAdvanced', 'SamplerCustom', 'KSamplerSelect'),
+      images: count('LoadImage'),
+    },
+  };
 }
 
 /** 一档是哪种：只认 comfyui，其余都当 OpenAI 兼容（和 src/chain.js 对齐）。 */
@@ -723,6 +842,8 @@ function statusPanel(ctx) {
   let chainDirty = false;
   let chainProbe = null;
   let chainAdvEntry = null;
+  /** 正在编辑自定义工作流的那一档（本地 ComfyUI 才有）。 */
+  let chainWfEntry = null;
   let chainJsonShown = false;
 
   const chainCard = ctx.ui.section(tx.chainTitle, tx.chainDesc);
@@ -792,6 +913,7 @@ function statusPanel(ctx) {
     kindSel.addEventListener('change', () => {
       entry.preset = kindSel.value === 'comfyui' ? 'comfyui' : 'openai';
       if (entry.preset !== 'comfyui' && chainAdvEntry === entry) chainAdvEntry = null;
+      if (entry.preset !== 'comfyui' && chainWfEntry === entry) chainWfEntry = null;
       markChainDirty();
       renderChain();
     });
@@ -824,13 +946,29 @@ function statusPanel(ctx) {
 
     const tools = ctx.ui.h('div', 'iw-chaintools');
     if (kind === 'comfyui') {
-      tools.append(ctx.ui.button(tx.chainAdv, {
-        size: 'sm',
-        onClick: () => {
-          chainAdvEntry = chainAdvEntry === entry ? null : entry;
-          renderChain();
-        },
-      }));
+      const wfCount = entry.workflow ? (() => {
+        const got = checkWorkflowJson(entry.workflow);
+        return got.workflow ? ` · ${tx.chainWfOn}` : '';
+      })() : '';
+      if (wfCount) tools.append(ctx.ui.h('span', 'iw-sub', `${tx.chainWf}${wfCount}`));
+      tools.append(
+        ctx.ui.button(tx.chainWf, {
+          size: 'sm',
+          onClick: () => {
+            chainWfEntry = chainWfEntry === entry ? null : entry;
+            if (chainWfEntry) chainAdvEntry = null;
+            renderChain();
+          },
+        }),
+        ctx.ui.button(tx.chainAdv, {
+          size: 'sm',
+          onClick: () => {
+            chainAdvEntry = chainAdvEntry === entry ? null : entry;
+            if (chainAdvEntry) chainWfEntry = null;
+            renderChain();
+          },
+        }),
+      );
     }
     tools.append(
       ctx.ui.button(tx.chainMoveUp, { size: 'sm', onClick: () => { moveChainEntry(index, -1); } }),
@@ -993,6 +1131,92 @@ function statusPanel(ctx) {
     return box;
   };
 
+  /** 一档的「自定义工作流」：整份 API JSON 贴进来，先校验再保存；空着就用内置流程。 */
+  const chainWfBlock = (entry) => {
+    const box = ctx.ui.h('div', 'iw-chainadv');
+    const head = ctx.ui.h('div', 'iw-chainadvhead');
+    head.append(
+      ctx.ui.h('span', null, `${tx.chainWfTitle} · ${String(entry.name || entry.ckpt || '')}`),
+      ctx.ui.button(tx.chainWfClose, {
+        size: 'sm',
+        onClick: () => {
+          chainWfEntry = null;
+          renderChain();
+        },
+      }),
+    );
+
+    const initial = entry.workflow ? JSON.stringify(entry.workflow, null, 2) : '';
+    const area = ctx.ui.textarea({ rows: 12, cls: 'mono', placeholder: tx.chainWfPlaceholder });
+    area.value = initial;
+    const note = ctx.ui.msgline('');
+
+    const say = (text, kind) => {
+      note.textContent = text;
+      note.style.color = kind === 'bad' ? '#d9534f' : kind === 'warn' ? '#c77c02' : '';
+    };
+    const describe = (got) => {
+      if (got.empty) {
+        say(tx.chainWfEmpty);
+        return false;
+      }
+      if (got.error) {
+        say(got.error, 'bad');
+        return false;
+      }
+      const head2 = tx.chainWfOk.replace('{n}', got.stats.nodes).replace('{s}', got.stats.samplers).replace('{i}', got.stats.images);
+      if (got.warnings.length) say(`${head2}\n${tx.chainWfWarn.replace('{list}', '')}${got.warnings.join('；')}`, 'warn');
+      else say(head2, 'ok');
+      return true;
+    };
+
+    const check = () => {
+      const got = checkWorkflowJson(area.value);
+      describe(got);
+      return got;
+    };
+
+    const bar = ctx.ui.h('div', 'iw-chainadvhead');
+    bar.append(
+      ctx.ui.button(tx.chainWfCheck, { size: 'sm', onClick: () => { check(); } }),
+      ctx.ui.button(tx.chainWfSave, {
+        size: 'sm',
+        onClick: () => {
+          const got = checkWorkflowJson(area.value);
+          if (got.empty) {
+            delete entry.workflow;
+            markChainDirty();
+            renderChain();
+            return;
+          }
+          if (got.error) {
+            describe(got);
+            return;
+          }
+          entry.workflow = got.workflow;
+          markChainDirty();
+          describe(got);
+          renderChain();
+        },
+      }),
+      ctx.ui.button(tx.chainWfClear, {
+        size: 'sm',
+        onClick: () => {
+          area.value = '';
+          delete entry.workflow;
+          markChainDirty();
+          say(tx.chainWfEmpty);
+        },
+      }),
+    );
+
+    if (initial) describe(checkWorkflowJson(initial));
+    else say(tx.chainWfEmpty);
+
+    box.append(head, area, bar, note, ctx.ui.h('div', 'iw-sub', tx.chainWfHint));
+    return box;
+  };
+
   const renderChain = () => {
     chainOrderLine.style.display = chainEdit.length ? '' : 'none';
     chainHead.style.display = chainEdit.length ? '' : 'none';
@@ -1005,6 +1229,7 @@ function statusPanel(ctx) {
     chainEdit.forEach((entry, index) => {
       chainRows.appendChild(chainRowOf(entry, index));
       if (chainAdvEntry === entry) chainRows.appendChild(chainAdvBlock(entry));
+      if (chainWfEntry === entry) chainRows.appendChild(chainWfBlock(entry));
     });
     // 链空着、且 JSON 框开着时，别用 `[]` 把里面的范例/草稿冲掉。
     if (!chainJsonShown || chainEdit.length || chainBroken) chainJson.value = chainToJson(chainEdit);
@@ -1071,6 +1296,7 @@ function statusPanel(ctx) {
   const removeChainEntry = (index) => {
     const [gone] = chainEdit.splice(index, 1);
     if (gone === chainAdvEntry) chainAdvEntry = null;
+    if (gone === chainWfEntry) chainWfEntry = null;
     chainDirty = true;
     chainProbe = null;
     renderChain();
