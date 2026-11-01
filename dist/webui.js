@@ -116,7 +116,7 @@ const ZH = {
   chainWf: '工作流',
   chainWfTitle: '自定义工作流',
   chainWfClose: '收起',
-  chainWfHint: '把 ComfyUI 里 ⚙ →「Save (API Format)」存出来的 JSON 整份贴进来，占位符用双大括号：{{prompt}} {{negative}} {{width}} {{height}} {{steps}} {{cfg}} {{sampler}} {{scheduler}} {{seed}} {{denoise}} {{image1}}…{{image4}} {{ckpt}} {{unet}} {{textEncoder}} {{vaeName}} {{loras}}。不用自定义工作流就留空，插件会用内置的 txt2img / img2img。',
+  chainWfHint: '把 ComfyUI 里 ⚙ →「Save (API Format)」存出来的 JSON 整份贴进来，占位符用双大括号：{{prompt}} {{negative}} {{width}} {{height}} {{steps}} {{cfg}} {{sampler}} {{scheduler}} {{seed}} {{denoise}} {{image1}}…{{image4}} {{ckpt}} {{unet}} {{textEncoder}} {{vaeName}} {{loras}} {{hasImage}} {{mode}}。有参考图时 {{hasImage}} 是真布尔 true，没参考图是 false —— 拿它接 ComfySwitchNode 的 switch 就能一份工作流兼出图与改图。不用自定义工作流就留空，插件会用内置的 txt2img / img2img。',
   chainWfPlaceholder: '{ "3": { "class_type": "KSampler", "inputs": { "seed": "{{seed}}", "steps": "{{steps}}", "cfg": "{{cfg}}", "sampler_name": "{{sampler}}", "scheduler": "{{scheduler}}", "denoise": "{{denoise}}", "model": ["4", 0], "positive": ["6", 0], "negative": ["7", 0], "latent_image": ["5", 0] } }, … }',
   chainWfCheck: '校验',
   chainWfSave: '保存工作流',
@@ -250,7 +250,7 @@ const EN = {
   chainWf: 'Workflow',
   chainWfTitle: 'Custom workflow',
   chainWfClose: 'Hide',
-  chainWfHint: 'Paste the whole JSON saved from ComfyUI with ⚙ → "Save (API Format)". Placeholders use double braces: {{prompt}} {{negative}} {{width}} {{height}} {{steps}} {{cfg}} {{sampler}} {{scheduler}} {{seed}} {{denoise}} {{image1}}…{{image4}} {{ckpt}} {{unet}} {{textEncoder}} {{vaeName}} {{loras}}. Leave it empty to use the built-in txt2img / img2img graphs.',
+  chainWfHint: 'Paste the whole JSON saved from ComfyUI with ⚙ → "Save (API Format)". Placeholders use double braces: {{prompt}} {{negative}} {{width}} {{height}} {{steps}} {{cfg}} {{sampler}} {{scheduler}} {{seed}} {{denoise}} {{image1}}…{{image4}} {{ckpt}} {{unet}} {{textEncoder}} {{vaeName}} {{loras}} {{hasImage}} {{mode}}. {{hasImage}} is a real boolean (true when reference pictures were supplied), so wiring it into ComfySwitchNode\'s switch lets one graph do both txt2img and img2img. Leave it empty to use the built-in txt2img / img2img graphs.',
   chainWfPlaceholder: '{ "3": { "class_type": "KSampler", "inputs": { "seed": "{{seed}}", "steps": "{{steps}}", "cfg": "{{cfg}}", "sampler_name": "{{sampler}}", "scheduler": "{{scheduler}}", "denoise": "{{denoise}}", "model": ["4", 0], "positive": ["6", 0], "negative": ["7", 0], "latent_image": ["5", 0] } }, … }',
   chainWfCheck: 'Check',
   chainWfSave: 'Save workflow',
@@ -412,6 +412,7 @@ const WF_VARS = new Set([
   'width', 'height', 'size', 'steps', 'cfg',
   'sampler', 'scheduler', 'seed', 'denoise', 'image', 'image1', 'image2', 'image3', 'image4',
   'images', 'loras', 'prefix', 'filename', 'note',
+  'hasImage', 'mode',
 ]);
 const WF_ALIASES = {
   negativePrompt: 'negative', negative_prompt: 'negative', positive: 'prompt', promptText: 'prompt',

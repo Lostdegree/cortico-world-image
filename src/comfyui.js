@@ -467,6 +467,8 @@ export const WORKFLOW_VARS = [
   'width', 'height', 'size', 'steps', 'cfg',
   'sampler', 'scheduler', 'seed', 'denoise', 'image', 'image1', 'image2', 'image3', 'image4',
   'images', 'loras', 'prefix', 'filename', 'note',
+  // `hasImage` 是真布尔（不是 "false" 字符串），`mode` 是 txt2img / img2img，方便一份工作流里分流。
+  'hasImage', 'mode',
 ];
 
 /** 常见拼错/别名的占位符 → 正确的那个，用来在提示里直接点出来。 */
@@ -934,5 +936,8 @@ function workflowVars(opts, { width, height, images = [] }) {
     note: String(opts.note ?? ''),
     loras: loras.map((l) => `${l.name}:${l.strength}`).join(','),
     prefix: String(opts.prefix ?? 'coopanion'),
+    // 真布尔：整串占位符会原样替换成 true/false，ComfySwitchNode 的 switch 口要的就是它。
+    hasImage: list.length > 0,
+    mode: list.length > 0 ? 'img2img' : 'txt2img',
   };
 }

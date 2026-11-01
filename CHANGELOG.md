@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.3
+
+- **一份工作流可以同时当出图和改图用。** 自定义工作流新增两个占位符：`{{hasImage}}` 是**真布尔**（这次带了参考图就是 `true`，没有就是 `false`），`{{mode}}` 是 `txt2img` / `img2img` 字符串。把 `{{hasImage}}` 接到 `ComfySwitchNode` 的 `switch` 上就行——它的 `on_true` / `on_false` 是惰性输入，没被选中的分支不会执行，于是改图分支（`LoadImage → ImageScale → VAEEncode`）与出图分支（`EmptyLatentImage`）共存也不冲突，两个 KSampler 各用各的 `denoise`，再用第二个 `ComfySwitchNode` 挑结果。
+- 面板里粘这种工作流时，`{{hasImage}}` / `{{mode}}` 不再被判成「不认识的占位符」（面板与后端的占位符表同一份口径），配套的自测也补上了：布尔类型不被字符串化、出图时 `switch` 是 `false`、改图时是 `true`。
+- 一并修掉 `src/comfyui.js` 里 `applyVars()` 注释块与 `export` 粘在同一行的排版残点。
+
 ## 0.8.2
 
 - **补上市场展示用的元数据**（按官方 `docs/extensions.md` 的「可选元数据」一节）：`cortico.icon` 指向包内新增的 `icon.png`（512×512，`files` 里也加上了），WebUI 卡片与详情页不再显示默认头像；`cortico.locales` 补了 `zh` / `en` 两份 `displayName` 与 `description`，界面是英文时市场不再只显示中文简介；`cortico.tags` 声明 `creative` 与 `requires-key`（与官方索引里对本包的 `addTags` 一致）。

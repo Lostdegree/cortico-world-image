@@ -1204,6 +1204,40 @@ try {
     check(!JSON.stringify(multiWf).includes('{{'), '提交前占位符全部换掉了', JSON.stringify(multiWf['1']));
     check(multiWf['1'].inputs.image === 'uploaded.png' && multiWf['2'].inputs.image === 'uploaded.png', '两处 LoadImage 都换成了上传后的文件名');
 
+    // 一份工作流兼出图与改图：{{hasImage}} 必须是真布尔，才能直接接 ComfySwitchNode 的 switch。
+    const wfBoth = {
+      1: { class_type: 'LoadImage', inputs: { image: '{{image1}}' } },
+      2: { class_type: 'EmptyLatentImage', inputs: { width: '{{width}}', height: '{{height}}', batch_size: 1 } },
+      3: { class_type: 'VAEEncode', inputs: { pixels: ['1', 0], vae: ['9', 0] } },
+      4: { class_type: 'ComfySwitchNode', inputs: { switch: '{{hasImage}}', on_false: ['2', 0], on_true: ['3', 0] } },
+      5: { class_type: 'KSampler', inputs: { model: ['9', 0], positive: ['6', 0], negative: ['7', 0], latent_image: ['4', 0], seed: '{{seed}}', steps: '{{steps}}', cfg: '{{cfg}}', sampler_name: '{{sampler}}', scheduler: '{{scheduler}}', denoise: '{{denoise}}' } },
+      6: { class_type: 'CLIPTextEncode', inputs: { text: '{{prompt}}', clip: ['9', 0] } },
+      7: { class_type: 'CLIPTextEncode', inputs: { text: '{{negative}}', clip: ['9', 0] } },
+      8: { class_type: 'SaveImage', inputs: { images: ['5', 0], filename_prefix: '{{prefix}}' } },
+      9: { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: '{{ckpt}}' } },
+    };
+    check(comfy.WORKFLOW_VARS.includes('hasImage') && comfy.WORKFLOW_VARS.includes('mode'), '占位符表里有 hasImage / mode');
+    check(
+      comfy.applyVars({ s: '{{hasImage}}' }, { hasImage: false }).s === false
+        && comfy.applyVars({ s: '{{hasImage}}' }, { hasImage: true }).s === true,
+      '整串占位符保留布尔类型（false 不是 "false" 字符串）',
+    );
+    check(comfy.applyVars({ s: '模式={{mode}}' }, { mode: 'img2img' }).s === '模式=img2img', 'mode 占位符按字符串拼进去');
+
+    comfyCalls.length = 0;
+    await comfy.comfyDraw({ baseUrl: 'http://comfy.test', ckpt: 'ck.safetensors', prompt: '鲸鱼', workflow: wfBoth, timeoutMs: 8000 });
+    const drawBoth = JSON.parse(comfyCalls.filter((c) => c.path === '/prompt').at(-1).body).prompt;
+    check(drawBoth['4'].inputs.switch === false, '出图时 {{hasImage}} 是 false（走 on_false 那条空 latent）', String(drawBoth['4'].inputs.switch));
+
+    comfyCalls.length = 0;
+    await comfy.comfyEdit({ baseUrl: 'http://comfy.test', ckpt: 'ck.safetensors', prompt: '改成水彩', image: comfyPng, mime: 'image/png', workflow: wfBoth, timeoutMs: 8000 });
+    const editBoth = JSON.parse(comfyCalls.filter((c) => c.path === '/prompt').at(-1).body).prompt;
+    check(
+      editBoth['4'].inputs.switch === true && editBoth['1'].inputs.image === 'uploaded.png',
+      '改图时 {{hasImage}} 是 true，LoadImage 也换成了上传后的文件名',
+      `${editBoth['4'].inputs.switch} / ${editBoth['1'].inputs.image}`,
+    );
+
     stubComfy({ prompt: () => jsonResponse({ error: { type: 'invalid_prompt' }, node_errors: { 4: { errors: [{ message: 'ckpt_name not in list' }] } } }, 400) });
     let comfyErr = null;
     try {
@@ -1564,6 +1598,17 @@ try {
   findByText(wfBox, '校验')?.click();
   await tick(30);
   check(/看着能跑：2 个节点/.test(wfText()), '校验通过时说出几个节点', wfText().split('\n').filter((it) => it.includes('看着能跑')).join(''));
+
+  // 面板的占位符表要和后端同一口径：{{hasImage}} / {{mode}} 不能被判成「不认识」。
+  wfArea.value = '{"1":{"class_type":"ComfySwitchNode","inputs":{"switch":"{{hasImage}}","on_false":["2",0],"on_true":["3",0]}},"2":{"class_type":"EmptyLatentImage","inputs":{"width":"{{width}}"}},"3":{"class_type":"VAEEncode","inputs":{"pixels":["2",0],"vae":["2",0]}}}';
+  fire(wfArea, 'input');
+  findByText(wfBox, '校验')?.click();
+  await tick(30);
+  check(
+    /看着能跑：3 个节点/.test(wfText()) && !/不认识/.test(wfText()),
+    '面板也认 {{hasImage}} / {{mode}}（和后端同一份占位符表）',
+    wfText().split('\n').filter((it) => it.includes('看着能跑') || it.includes('不认识')).join(''),
+  );
 
   wfArea.value = '{"nodes":[],"links":[]}';
   fire(wfArea, 'input');

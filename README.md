@@ -289,8 +289,14 @@ pnpm add "D:\path\to\cortico-world-image" --ignore-workspace
 `prompt`、`negative`、`ckpt`、`width`、`height`、`size`、`steps`、`cfg`、`sampler`、`scheduler`、
 `seed`、`denoise`、`image`（第一张参考图）、`image1`/`image2`/`image3`/`image4`（依次对应
 `image_edit` 的 `images`）、`images`（逗号连起来的所有参考图）、`loras`、`prefix`、`filename`、
-`note`（一小行说明，写工作流时不用管）；写成 `{{prompt}}` 这样，认不出的原样留着。
+`note`（一小行说明，写工作流时不用管）、`hasImage`（**真布尔**：这次带了参考图就是 `true`）、
+`mode`（`txt2img` / `img2img`）；写成 `{{prompt}}` 这样，认不出的原样留着。
 占位符两边有别的字符（比如 `"a photo, {{prompt}}"`）时按字符串拼进去；整个值就是一个占位符时保留原类型。
+
+`hasImage` 之所以是布尔而不是 `"true"` 字符串，是为了直接接到 `ComfySwitchNode` 的 `switch` 口上：
+它的 `on_true` / `on_false` 是惰性输入，没被选中的那条分支不会执行，于是一份工作流就能兼出图与改图
+（改图分支挂 `LoadImage → ImageScale → VAEEncode`，出图分支挂 `EmptyLatentImage`，两个 KSampler
+各用各的 `denoise`，再用第二个 `ComfySwitchNode` 选采样结果）。
 
 ### 密钥
 
