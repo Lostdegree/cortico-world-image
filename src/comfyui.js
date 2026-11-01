@@ -789,6 +789,21 @@ export async function interrupt(baseUrl, { timeoutMs = 10000 } = {}) {
   return await requestJson(at(baseUrl, 'interrupt'), { method: 'POST', body: '{}', timeoutMs, what: '中断任务的 ComfyUI' });
 }
 
+/**
+ * 让 ComfyUI 把模型从显存里卸掉（`POST /free`）。空闲自动卸载调用它。
+ *
+ * 实测 4090：卸载后立刻还回 12.4 GB 显存，代价是下次首图要重新加载（热缓存 15s 上下）。
+ * 卸载是「尽力而为」：模型已经不在显存里、或者对方不认这个接口，都不算错。
+ */
+export async function comfyFree(baseUrl, { unloadModels = true, freeMemory = true, timeoutMs = 10000 } = {}) {
+  return await requestJson(at(baseUrl, 'free'), {
+    method: 'POST',
+    body: JSON.stringify({ unload_models: Boolean(unloadModels), free_memory: Boolean(freeMemory) }),
+    timeoutMs,
+    what: '卸载模型的 ComfyUI',
+  });
+}
+
 /** 探活：设置页与状态页用它判断「本地模型在不在」。 */
 export async function probe(baseUrl, { timeoutMs = 5000 } = {}) {
   try {

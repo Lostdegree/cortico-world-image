@@ -217,6 +217,8 @@ pnpm add "D:\path\to\cortico-world-image" --ignore-workspace
 | `saveDir` | 空 | 留空 = 本插件数据目录下的 `images/` |
 | `keep` | `200` | 超出后自动删最旧的，`0` = 不清理 |
 | `pushToConsole` | `true` | 画完实时推给「作品」页 |
+| `idleUnloadMinutes` | `10` | 本地 ComfyUI 空着超过这么多分钟就让它卸模型（`POST /free`），把显存还给别的程序；`0` = 不卸（0.8.4 起） |
+| `probeBeforeDraw` | `true` | 动本地 ComfyUI 之前先 `GET /system_stats` 探活，没启动就直接告诉你，而不是等超时（0.8.4 起） |
 
 ### 模型链：一串后端按顺序试（0.4.0）
 
@@ -281,7 +283,8 @@ pnpm add "D:\path\to\cortico-world-image" --ignore-workspace
 
 `POST /prompt`（提交工作流）、`GET /history/<prompt_id>`（轮询等结果）、`GET /view?filename=…`
 （取成品图）、`POST /upload/image`（改图时把参考图放进 `input/`）、`POST /interrupt`（超时收尾）、
-`GET /system_stats`、`GET /object_info`（核对模型文件名，拿不到就跳过核对）。
+`GET /system_stats`（探活与显存读数）、`POST /free`（空闲卸载，把模型从显存里放下）、
+`GET /object_info`（核对模型文件名，拿不到就跳过核对）。
 
 不会替你去下模型：checkpoint 与 LoRA 得先放进 ComfyUI 的 `models/checkpoints` 与 `models/loras`，
 `ckpt` 写文件名（在子目录里就写相对路径）；裸 UNet 的三个文件放进 `models/diffusion_models`、
@@ -297,6 +300,15 @@ pnpm add "D:\path\to\cortico-world-image" --ignore-workspace
 它的 `on_true` / `on_false` 是惰性输入，没被选中的那条分支不会执行，于是一份工作流就能兼出图与改图
 （改图分支挂 `LoadImage → ImageScale → VAEEncode`，出图分支挂 `EmptyLatentImage`，两个 KSampler
 各用各的 `denoise`，再用第二个 `ComfySwitchNode` 选采样结果）。
+
+#### 显存与探活（0.8.4 起）
+
+- **空闲卸载**：本地这档画完、`idleUnloadMinutes`（默认 10）分钟内没人再画，就 `POST /free`
+  让它把模型从显存里放下，把卡还给游戏/别的推理程序；下次出图自动重新加载。点了「测试」按钮、
+  或探活判断「这次没加载模型」时不会乱卸。
+- **出图前探活**：动 ComfyUI 之前先 `GET /system_stats`。没启动就直接回
+  「ComfyUI 好像没启动」并给出启动命令，而不是白等一张图的超时；`probeBeforeDraw` 可以关掉。
+- 卸载只影响显存里的模型，不动磁盘上的文件；ComfyUI 那边会重新从 `models/` 读，等几秒而已。
 
 ### 密钥
 

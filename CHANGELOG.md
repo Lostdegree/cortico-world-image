@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.4
+
+- **本地 ComfyUI 空闲时把模型卸掉，显存还给别的程序。** 本地这档画完、`idleUnloadMinutes`（默认 10）分钟内没人再画，就 `POST /free` 让它把模型从显存里放下；下次出图自动重新加载。`0` = 不卸载。点了「测试」按钮、或探活判断这次本来就没加载模型时不会乱卸。
+- **出图前先探活。** 动本地 ComfyUI 之前 `GET /system_stats` 问一句，没启动就直接回「ComfyUI 好像没启动」并给启动命令，不用白等一张图的超时；`probeBeforeDraw` 可以关掉。
+- 这两个开关都在 `worlds.image` 段（控制台「图片工坊 → 状态/设置」里改，即时生效）。实测 4090 24GB + 34GB 内存跑 Krea2 Q4 加 Qwen3VL 4B 文本编码器，峰值 14.0–14.6GB；`/free` 之后回落到 1.6GB，一次卸载能还回 12.4GB，冷启 15.3–32.5 秒、热启 2.5–5.2 秒。
+
 ## 0.8.3
 
 - **一份工作流可以同时当出图和改图用。** 自定义工作流新增两个占位符：`{{hasImage}}` 是**真布尔**（这次带了参考图就是 `true`，没有就是 `false`），`{{mode}}` 是 `txt2img` / `img2img` 字符串。把 `{{hasImage}}` 接到 `ComfySwitchNode` 的 `switch` 上就行——它的 `on_true` / `on_false` 是惰性输入，没被选中的分支不会执行，于是改图分支（`LoadImage → ImageScale → VAEEncode`）与出图分支（`EmptyLatentImage`）共存也不冲突，两个 KSampler 各用各的 `denoise`，再用第二个 `ComfySwitchNode` 挑结果。

@@ -22,6 +22,8 @@ export const DEFAULTS = Object.freeze({
   saveDir: '',
   keep: 200,
   pushToConsole: true,
+  idleUnloadMinutes: 10,
+  probeBeforeDraw: true,
 });
 
 const ZH = {
@@ -72,6 +74,10 @@ const ZH = {
     keepDesc: '超出后自动删掉最旧的图，0 表示不清理。',
     push: '推送到作品页',
     pushDesc: '画完实时显示在「作品」页；关掉只是不推送，图照样存盘。',
+    idleUnload: '空闲卸载（分钟）',
+    idleUnloadDesc: '本地 ComfyUI 这一档空着超过这个分钟数，就让它把模型从显存里卸掉（POST /free），把卡还给别的东西；下次出图会自动重新加载。0 表示不卸载。',
+    probe: '出图前探活',
+    probeDesc: '动本地 ComfyUI 之前先问一句「在跑吗」（GET /system_stats）。没跑就直接告诉你「ComfyUI 没启动」，而不是等一张图超时。',
   },
 };
 
@@ -123,6 +129,10 @@ const EN = {
     keepDesc: 'Oldest pictures are pruned above this count; 0 disables pruning.',
     push: 'Push to Pictures panel',
     pushDesc: 'Show new pictures live on the Pictures panel. Off only stops the live push; files are still saved.',
+    idleUnload: 'Unload when idle (minutes)',
+    idleUnloadDesc: 'When the local ComfyUI entry has been unused for this many minutes, ask it to drop its models from VRAM (POST /free) so other apps get the card back; the next drawing reloads them. 0 disables it.',
+    probe: 'Probe before drawing',
+    probeDesc: 'Ask the local ComfyUI "are you running?" (GET /system_stats) before submitting a job, so you get a plain "ComfyUI is not running" instead of a timeout.',
   },
 };
 
@@ -188,6 +198,17 @@ export function configGroup(language = 'zh') {
           'x-suffix': '张',
         },
         [`${K}.pushToConsole`]: { type: 'boolean', title: t.push, description: t.pushDesc, 'x-hot': true },
+        [`${K}.idleUnloadMinutes`]: {
+          type: 'integer',
+          title: t.idleUnload,
+          description: t.idleUnloadDesc,
+          minimum: 0,
+          maximum: 1440,
+          multipleOf: 1,
+          'x-suffix': 'min',
+          'x-hot': true,
+        },
+        [`${K}.probeBeforeDraw`]: { type: 'boolean', title: t.probe, description: t.probeDesc, 'x-hot': true },
       },
     },
   };

@@ -15,7 +15,8 @@ import { fileURLToPath } from 'node:url';
 
 import { ImageApiError, editImage, generateImage, normalizeCloudSize } from './api.js';
 import { ChainError, chainSnapshot, entryLabel, entryState, parseChainEntries, runChain } from './chain.js';
-import { comfyDraw, comfyEdit, listModels, normalizeWorkflow, probe as probeComfy } from './comfyui.js';
+import { comfyDraw, comfyEdit, comfyFree, listModels, normalizeWorkflow, probe as probeComfy } from './comfyui.js';
+import { dueTargets, idleMinutes, nextDelay } from './idle.js';
 import { DEFAULTS, ID, configGroup, text } from './config.js';
 import { Gallery } from './gallery.js';
 import { samplePng } from './png.js';
@@ -58,6 +59,9 @@ export class ImageWorld {
   #busy = 0;
   #lastError = '';
   #lastItemAt = '';
+  /** 本地 ComfyUI 的「最后一次用」时间：地址 → 毫秒时间戳，空闲卸载靠它算。 */
+  #comfyUse = new Map();
+  #idleTimer = null;
 
   constructor(opts = {}) {
     this.id = ID;
@@ -94,6 +98,58 @@ export class ImageWorld {
   #bool(key) {
     const value = this.#raw(key);
     return typeof value === 'boolean' ? value : Boolean(DEFAULTS[key]);
+  }
+
+  // -------------------------------------------------------------------------
+  // 本地 ComfyUI：出图前探活、空闲久了自己卸模型
+  // -------------------------------------------------------------------------
+
+  /**
+   * 出图前先问一句「在跑吗」：`/system_stats` 一问就答。
+   * 没跑就把话说清楚，省得用户拿到一句干巴巴的 `fetch failed`。
+   */
+  async #requireComfy(baseUrl) {
+    if (!this.#bool('probeBeforeDraw')) return;
+    const got = await probeComfy(baseUrl, { timeoutMs: 4000 });
+    if (got.ok) return;
+    throw new ImageApiError(
+      `本地 ComfyUI 没在跑（${baseUrl} 连不上：${got.error}）。先把 ComfyUI 启动起来（跑它的 main.py，或打开 Comfy Desktop 等它加载完），或者把这一档的地址改成它实际监听的端口。`,
+      { status: 503 },
+    );
+  }
+
+  /** 记一笔「这个地址刚画过一张」，并按空闲分钟数排下一次卸载。 */
+  #noteComfyUse(baseUrl) {
+    if (!idleMinutes(this.#raw('idleUnloadMinutes'))) return;
+    this.#comfyUse.set(baseUrl, Date.now());
+    this.#scheduleIdle();
+  }
+
+  #scheduleIdle() {
+    if (this.#idleTimer) return;
+    const minutes = idleMinutes(this.#raw('idleUnloadMinutes'));
+    if (!minutes) return;
+    const wait = nextDelay(this.#comfyUse, Date.now(), minutes);
+    if (!wait) return;
+    this.#idleTimer = setTimeout(() => { void this.#unloadIdle(); }, Math.min(wait, 24 * 60 * 60 * 1000));
+    // 别为了一个定时器把进程钉住（库里跑的时候尤其重要）。
+    if (typeof this.#idleTimer?.unref === 'function') this.#idleTimer.unref();
+  }
+
+  /** 到点了：让空闲够久的 ComfyUI 卸掉模型，还回显存；没到点的重新排。 */
+  async #unloadIdle() {
+    this.#idleTimer = null;
+    const minutes = idleMinutes(this.#raw('idleUnloadMinutes'));
+    if (!minutes) return;
+    for (const baseUrl of dueTargets(this.#comfyUse, Date.now(), minutes)) {
+      this.#comfyUse.delete(baseUrl);
+      try {
+        await comfyFree(baseUrl, { timeoutMs: 8000 });
+      } catch {
+        // 对方已经关了、或老版本没这条路由：尽力而为，不再纠缠
+      }
+    }
+    if (this.#comfyUse.size) this.#scheduleIdle();
   }
 
   #text() {
@@ -385,6 +441,7 @@ export class ImageWorld {
   /** 用一档后端画一张新图。 */
   async #generateWith(entry, { prompt, size, quality }) {
     if (entry.preset === 'comfyui') {
+      await this.#requireComfy(entry.baseUrl);
       const res = await comfyDraw({
         baseUrl: entry.baseUrl,
         ckpt: entry.ckpt,
@@ -431,6 +488,7 @@ export class ImageWorld {
     }));
     const workflow = entry.workflow ? this.#entryWorkflow(entry) : null;
     if (entry.preset === 'comfyui') {
+      await this.#requireComfy(entry.baseUrl);
       const res = await comfyEdit({
         baseUrl: entry.baseUrl,
         ckpt: entry.ckpt,
@@ -452,6 +510,7 @@ export class ImageWorld {
         prefix: 'coopanion',
         timeoutMs: entry.timeoutMs,
       });
+      this.#noteComfyUse(entry.baseUrl);
       return { bytes: res.bytes, mime: res.mime, revisedPrompt: null, promptId: res.promptId, size: res.size };
     }
     const key = this.#entryKey(entry);
