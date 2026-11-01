@@ -1669,6 +1669,125 @@ try {
   await tick(30);
   check(chainRowsOf().length === 0, '「删除」能去掉一档', String(chainRowsOf().length));
 
+  section('本地 ComfyUI：探活与空闲卸载（0.8.4）');
+  const idleMod = await import(pathToFileURL(join(pkgDir, 'src', 'idle.js')).href);
+  check(idleMod.idleMinutes(10) === 10 && idleMod.idleMinutes(0) === 0 && idleMod.idleMinutes('x') === 0, 'idleMinutes 只认正数，别的一律当 0');
+  const idleNow = 10_000_000;
+  check(idleMod.dueTargets(new Map(), idleNow, 10).length === 0, '没用过的地址表 → 没人该卸');
+  check(
+    idleMod.dueTargets(new Map([['http://a', idleNow - 100_000]]), idleNow, 10).length === 0,
+    '才空 100 秒的本地档不该卸',
+  );
+  check(
+    JSON.stringify(idleMod.dueTargets(new Map([['http://a', idleNow - 700_000]]), idleNow, 10)) === '["http://a"]',
+    '空够 10 分钟的本地档到期',
+    JSON.stringify(idleMod.dueTargets(new Map([['http://a', idleNow - 700_000]]), idleNow, 10)),
+  );
+  check(idleMod.dueTargets(new Map([['http://a', idleNow - 700_000]]), idleNow, 0).length === 0, '关掉空闲卸载就谁都不卸');
+  check(
+    idleMod.nextDelay(new Map([['http://a', idleNow]]), idleNow, 10) === 600_000,
+    '刚画完时下一次检查排在一个间隔之后',
+    String(idleMod.nextDelay(new Map([['http://a', idleNow]]), idleNow, 10)),
+  );
+  check(idleMod.nextDelay(new Map(), idleNow, 10) === 0, '没有本地档就不排定时器');
+
+
+  // 一张 512×512 的假 PNG：探活/卸载那几条只关心「画完了」与「调了哪些路」
+  const probePng = Buffer.alloc(33);
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(probePng, 0);
+  probePng.writeUInt32BE(512, 16);
+  probePng.writeUInt32BE(512, 20);
+  const probeCalls = [];
+  const stubProbeComfy = (opts = {}) => {
+    probeCalls.length = 0;
+    globalThis.fetch = async (url, init = {}) => {
+      const u = new URL(String(url));
+      const method = init.method ?? 'GET';
+      probeCalls.push({ path: u.pathname, method });
+      if (u.pathname.endsWith('/system_stats')) {
+        if (opts.offline) throw new Error('fetch failed');
+        return jsonResponse({ devices: [{ name: 'Fake GPU', vram_free: 1, vram_total: 2 }], system: {} });
+      }
+      if (u.pathname.endsWith('/prompt') && method === 'POST') return jsonResponse({ prompt_id: 'p-i', number: 1 });
+      if (u.pathname.startsWith('/history/')) {
+        return jsonResponse({ 'p-i': { status: { status_str: 'success', completed: true }, outputs: { 9: { images: [{ filename: 'i.png', subfolder: '', type: 'output' }] } } } });
+      }
+      if (u.pathname.endsWith('/view')) return new Response(probePng, { status: 200, headers: { 'content-type': 'image/png' } });
+      if (u.pathname.endsWith('/free')) {
+        if (opts.freeStatus) return new Response('nope', { status: opts.freeStatus });
+        return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      return new Response('nope', { status: 404 });
+    };
+  };
+  const comfyWorld = (cfgPatch) =>
+    definition.create({
+      cfg: {
+        ...definition.defaults(),
+        enabled: true,
+        models: JSON.stringify([{ name: 'local', preset: 'comfyui', baseUrl: 'http://comfy.test', ckpt: 'ck.safetensors', size: '512x512' }]),
+        saveDir: join(work, 'comfy-save'),
+        idleUnloadMinutes: 0,
+        probeBeforeDraw: true,
+        ...cfgPatch,
+      },
+      dataDir,
+      botDir,
+      packageDir: pkgDir,
+      secret: (name) => envStore.get(name) ?? '',
+      storeSecret: () => {},
+    });
+  try {
+    const offlineWorld = comfyWorld({});
+    const offlineDraw = offlineWorld.tools().find((t) => t.name === 'image_draw');
+    stubProbeComfy({ offline: true });
+    const offlineOut = await offlineDraw.handler({ prompt: '一只鲸鱼' });
+    check(
+      offlineOut && offlineOut.failed === true && String(offlineOut.text).includes('没在跑'),
+      'ComfyUI 没启动时直接说清，不等一张图超时',
+      String(offlineOut?.text).slice(0, 120),
+    );
+    check(probeCalls.some((c) => c.path === '/system_stats') && !probeCalls.some((c) => c.path === '/prompt'), '没探到活就不提交任务');
+    check(String(offlineOut.text).includes('main.py'), '顺带给出启动命令，用户照着敲就行', String(offlineOut.text));
+
+    const liveWorld = comfyWorld({});
+    const liveDraw = liveWorld.tools().find((t) => t.name === 'image_draw');
+    stubProbeComfy();
+    const liveOut = await liveDraw.handler({ prompt: '一只鲸鱼' });
+    check(!liveOut?.failed && probeCalls.some((c) => c.path === '/system_stats'), '探活在、就照常提交', String(liveOut?.text).slice(0, 80));
+    check(probeCalls.filter((c) => c.path === '/system_stats').length === 1, '探活一次就够，不重复问', String(probeCalls.length));
+
+    const noProbeWorld = comfyWorld({ probeBeforeDraw: false });
+    const noProbeDraw = noProbeWorld.tools().find((t) => t.name === 'image_draw');
+    stubProbeComfy({ offline: true });
+    const noProbeOut = await noProbeDraw.handler({ prompt: '一只鲸鱼' });
+    check(!noProbeOut?.failed && !probeCalls.some((c) => c.path === '/system_stats'), 'probeBeforeDraw 关掉就不探活，省一次往返', String(noProbeOut?.text).slice(0, 80));
+
+    // 空闲卸载：间隔 0.02 分钟（1.2 秒），画完等它自己卸
+    const idleWorld = comfyWorld({ idleUnloadMinutes: 0.02 });
+    const idleDraw = idleWorld.tools().find((t) => t.name === 'image_draw');
+    stubProbeComfy();
+    const idleOut = await idleDraw.handler({ prompt: '一只鲸鱼' });
+    check(!idleOut?.failed, '空闲卸载那档本身能正常画', String(idleOut?.text).slice(0, 80));
+    check(!probeCalls.some((c) => c.path === '/free'), '刚画完不会立刻卸载');
+    await new Promise((r) => setTimeout(r, 1600));
+    check(
+      probeCalls.some((c) => c.path === '/free' && c.method === 'POST'),
+      '空够时间后自动 POST /free 把模型放下',
+      probeCalls.map((c) => `${c.method} ${c.path}`).join(' '),
+    );
+
+    // 卸载失败不该影响画图（只是显存没还回来）
+    const failWorld = comfyWorld({ idleUnloadMinutes: 0.005 });
+    const failDraw = failWorld.tools().find((t) => t.name === 'image_draw');
+    stubProbeComfy({ freeStatus: 500 });
+    const failOut = await failDraw.handler({ prompt: '一只鲸鱼' });
+    await new Promise((r) => setTimeout(r, 900));
+    check(!failOut?.failed, '/free 失败不影响这次出图', String(failOut?.text).slice(0, 80));
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+
   section('未知方法与面板');
   let threw = false;
   try {

@@ -461,6 +461,7 @@ export class ImageWorld {
         prefix: 'coopanion',
         timeoutMs: entry.timeoutMs,
       });
+      this.#noteComfyUse(entry.baseUrl);
       return { bytes: res.bytes, mime: res.mime, revisedPrompt: null, promptId: res.promptId, size: res.size };
     }
     const key = this.#entryKey(entry);
