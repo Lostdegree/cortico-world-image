@@ -272,6 +272,8 @@ function runSuite(title, args, env) {
 }
 
 runSuite('离线检查（tools/check.mjs）', [join('tools', 'check.mjs')]);
+runSuite('模型选择回归', [join('tools', 'model-selection.test.mjs')]);
+runSuite('ComfyUI 单次参数回归', [join('tools', 'comfy-overrides.test.mjs')]);
 
 const hostManifest = join('build', 'cortico', 'src', 'extensions', 'manifest.ts');
 const hostDescribe = join('build', 'cortico', 'src', 'extensions', 'describe-export.ts');

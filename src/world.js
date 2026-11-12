@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 
 import { ImageApiError, editImage, generateImage, normalizeCloudSize } from './api.js';
 import { ChainError, chainSnapshot, entryLabel, entryState, parseChainEntries, runChain } from './chain.js';
-import { comfyDraw, comfyEdit, comfyFree, listModels, normalizeWorkflow, probe as probeComfy } from './comfyui.js';
+import { comfyDraw, comfyEdit, comfyFree, listModels, normalizeWorkflow, validateOverrides, probe as probeComfy } from './comfyui.js';
 import { dueTargets, idleMinutes, nextDelay } from './idle.js';
 import { DEFAULTS, ID, configGroup, text } from './config.js';
 import { Gallery } from './gallery.js';
@@ -308,6 +308,7 @@ export class ImageWorld {
   /** 按名字把 handler 接到各工具的实现上；名字表就是 TOOL_SPECS。 */
   async #runTool(name, args) {
     switch (name) {
+      case 'image_models': return this.#models();
       case 'image_draw': return await this.#draw(args);
       case 'image_edit': return await this.#edit(args);
       case 'image_gallery': return await this.#list(args);
@@ -316,19 +317,37 @@ export class ImageWorld {
     }
   }
 
+  #models() {
+    const { entries, error } = this.#chain();
+    if (error) return { text: `模型链配置有误，无法发现模型。`, failed: true };
+    const lines = entries.map((entry) => {
+      const state = this.#entryState(entry);
+      const draw = state.ok ? '配置就绪（未探活）' : state.reason;
+      const edit = !state.ok ? state.reason : entry.edit ? '配置就绪（未探活）' : '未启用改图';
+      return `- ${entryLabel(entry)}（${entry.preset}）：画图 ${draw}；改图 ${edit}`;
+    });
+    return { text: `已配置模型档（按优先级；运行时仍可能失败）：\n${lines.join('\n')}` };
+  }
+
   async #draw(args) {
     const prompt = asText(args.prompt);
     if (!prompt) return { text: '[image_draw 没执行] prompt 是空的。不想画就别调用。', failed: true };
     const { entries, error } = this.#chain();
     if (error) return { text: `[image_draw 没执行] ${error}`, failed: true };
     const usable = this.#usableEntries(entries);
-    if (!usable.length) return { text: `[image_draw 没执行] 没有能出图的一档：${this.#chainReasons(entries)}`, failed: true };
     const named = asText(args.model);
+    if (!named && !usable.length) return { text: `[image_draw 没执行] 没有能出图的一档：${this.#chainReasons(entries)}`, failed: true };
     const size = asText(args.size);
     const quality = asText(args.quality);
+    let overrides;
+    try { overrides = validateOverrides(args, { strictSize: false }); } catch (err) { return this.#failure('image_draw', err); }
     this.#busy += 1;
     try {
-      const res = await runChain(usable, (entry) => this.#generateWith(entry, { prompt, size, quality }), { only: named });
+      const res = await runChain(named ? entries : usable, (entry) => {
+        const state = this.#entryState(entry);
+        if (!state.ok) throw new ImageApiError(state.reason);
+        return this.#generateWith(entry, { prompt, size, quality, overrides });
+      }, { only: named, fallback: this.#bool('namedModelFallback'), allowCrossEndpoint: this.#bool('allowCrossEndpointFallback') });
       const used = res.entry;
       const label = entryLabel(used);
       const shown = res.revisedPrompt ? String(res.revisedPrompt) : prompt;
@@ -395,13 +414,20 @@ export class ImageWorld {
     const { entries, error } = this.#chain();
     if (error) return { text: `[image_edit 没执行] ${error}`, failed: true };
     const usable = this.#usableEntries(entries, { forEdit: true });
-    if (!usable.length) return { text: `[image_edit 没执行] 没有能改图的一档：${this.#chainReasons(entries)}`, failed: true };
     const named = asText(args.model);
+    if (!named && !usable.length) return { text: `[image_edit 没执行] 没有能改图的一档：${this.#chainReasons(entries)}`, failed: true };
     const size = asText(args.size);
     const quality = asText(args.quality);
+    let overrides;
+    try { overrides = validateOverrides(args, { strictSize: false }); } catch (err) { return this.#failure('image_edit', err); }
     this.#busy += 1;
     try {
-      const res = await runChain(usable, (entry) => this.#editWith(entry, { prompt, size, quality, locals }), { only: named });
+      const res = await runChain(named ? entries : usable, (entry) => {
+        const state = this.#entryState(entry);
+        if (!state.ok) throw new ImageApiError(state.reason);
+        if (!entry.edit) throw new ImageApiError('未启用改图');
+        return this.#editWith(entry, { prompt, size, quality, locals, overrides });
+      }, { only: named, fallback: this.#bool('namedModelFallback'), allowCrossEndpoint: this.#bool('allowCrossEndpointFallback') });
       const used = res.entry;
       const label = entryLabel(used);
       const shown = res.revisedPrompt ? String(res.revisedPrompt) : prompt;
@@ -439,8 +465,13 @@ export class ImageWorld {
   }
 
   /** 用一档后端画一张新图。 */
-  async #generateWith(entry, { prompt, size, quality }) {
+  async #generateWith(entry, { prompt, size, quality, overrides }) {
+    if (entry.preset !== 'comfyui') {
+      const unsupported = Object.keys(overrides).filter((key) => key !== 'size');
+      if (unsupported.length) throw new ImageApiError(`这一档不支持参数：${unsupported.join('、')}`, { status: 400 });
+    }
     if (entry.preset === 'comfyui') {
+      validateOverrides(overrides);
       await this.#requireComfy(entry.baseUrl);
       const res = await comfyDraw({
         baseUrl: entry.baseUrl,
@@ -450,11 +481,14 @@ export class ImageWorld {
         textEncoderType: entry.textEncoderType,
         vaeName: entry.vaeName,
         loras: entry.loras,
-        negative: entry.negative,
+        negative: overrides.negative ?? entry.negative,
+        seed: overrides.seed,
+        overrides,
         prompt,
         size: size || entry.size,
-        steps: entry.steps,
-        cfg: entry.cfg,
+        denoise: overrides.denoise,
+        steps: overrides.steps ?? entry.steps,
+        cfg: overrides.cfg ?? entry.cfg,
         sampler: entry.sampler,
         scheduler: entry.scheduler,
         workflow: entry.workflow ? this.#entryWorkflow(entry) : null,
@@ -481,7 +515,11 @@ export class ImageWorld {
   }
 
   /** 用一档后端改图：`locals` 是一张或多张本地参考图（已确认存在）。 */
-  async #editWith(entry, { prompt, size, quality, locals }) {
+  async #editWith(entry, { prompt, size, quality, locals, overrides }) {
+    if (entry.preset !== 'comfyui') {
+      const unsupported = Object.keys(overrides).filter((key) => key !== 'size');
+      if (unsupported.length) throw new ImageApiError(`这一档不支持参数：${unsupported.join('、')}`, { status: 400 });
+    }
     const refs = locals.map((local) => ({
       bytes: readFileSync(local.path),
       mime: local.mime,
@@ -489,6 +527,7 @@ export class ImageWorld {
     }));
     const workflow = entry.workflow ? this.#entryWorkflow(entry) : null;
     if (entry.preset === 'comfyui') {
+      validateOverrides(overrides);
       await this.#requireComfy(entry.baseUrl);
       const res = await comfyEdit({
         baseUrl: entry.baseUrl,
@@ -498,13 +537,15 @@ export class ImageWorld {
         textEncoderType: entry.textEncoderType,
         vaeName: entry.vaeName,
         loras: entry.loras,
-        negative: entry.negative,
+        negative: overrides.negative ?? entry.negative,
+        seed: overrides.seed,
+        overrides,
         prompt,
         images: refs,
         size: size || entry.size,
-        denoise: entry.denoise,
-        steps: entry.steps,
-        cfg: entry.cfg,
+        denoise: overrides.denoise ?? entry.denoise,
+        steps: overrides.steps ?? entry.steps,
+        cfg: overrides.cfg ?? entry.cfg,
         sampler: entry.sampler,
         scheduler: entry.scheduler,
         workflow,

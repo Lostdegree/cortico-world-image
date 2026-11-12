@@ -391,7 +391,7 @@ try {
     check(Array.isArray(tool.tags) && tool.tags.length > 0, `${where} tags 非空`, JSON.stringify(tool.tags));
     check(typeof tool.description === 'string' && tool.description.length > 10, `${where} 有描述`);
   }
-  check(tools.length === 4, '工具数量是 4', String(tools.length));
+  check(tools.length === 5, '工具数量是 5', String(tools.length));
 
   section('提示词变量');
   const vars = world.envPromptVars();
@@ -438,7 +438,7 @@ try {
   const draw = tools.find((t) => t.name === 'image_draw');
   const noKey = await draw.handler({ prompt: '一只鲸鱼' });
   check(noKey && noKey.failed === true, '没配密钥时 image_draw 失败得明明白白', JSON.stringify(noKey).slice(0, 120));
-  check(String(noKey.text).includes('IMAGE_API_KEY'), '失败文案点名了密钥变量', String(noKey.text));
+  check(String(noKey.text).includes('没有密钥'), '失败文案说明缺少密钥', String(noKey.text));
   const noPrompt = await draw.handler({});
   check(noPrompt && noPrompt.failed === true, '空 prompt 直接拒绝');
   const edit = tools.find((t) => t.name === 'image_edit');
@@ -861,7 +861,7 @@ try {
   check(chainMod.parseChainEntries('[oops').error.includes('不是合法 JSON'), '坏 JSON 整份报错');
   check(chainMod.parseChainEntries('{"a":1}').error.includes('JSON 数组'), '不是数组也整份报错');
   const noUsable = chainMod.parseChainEntries('[{"name":"x","preset":"openai"}]');
-  check(noUsable.error.includes('没有一档可用') && noUsable.warnings.some((w) => w.includes('没有 baseUrl')), '每档都要有地址，缺的跳过并提醒');
+  check(!noUsable.error && noUsable.entries.length === 1 && !chainMod.entryState(noUsable.entries[0]).ok, '缺地址的档保留并报告不可用');
 
   const chain = chainMod.parseChainEntries(
     JSON.stringify([
@@ -871,10 +871,10 @@ try {
       { name: 'local', preset: 'comfyui', baseUrl: 'http://127.0.0.1:8189', ckpt: 'other.safetensors' },
     ]),
   );
-  check(chain.error === '' && chain.entries.length === 3, '三档有效、没地址的跳过', String(chain.entries.length));
+  check(chain.error === '' && chain.entries.length === 4 && !chainMod.entryState(chain.entries[2]).ok, '保留缺地址的档以便报告原因', String(chain.entries.length));
   check(chain.entries[0].preset === 'comfyui' && chain.entries[0].ckpt === 'sd_xl_base_1.0.safetensors' && chain.entries[0].model === '', 'comfyui 档带 ckpt、不用模型名');
   check(chain.entries[0].steps === 150 && chain.entries[0].cfg === 30, 'steps / cfg 夹到上限', `${chain.entries[0].steps}/${chain.entries[0].cfg}`);
-  check(chain.entries[2].name === 'local#4', '重名的档自动改名', chain.entries[2].name);
+  check(chain.entries[3].name === 'local#4', '重名的档自动改名', chain.entries[3].name);
   check(chain.entries[1].apiKeySecret === 'IMAGE_API_KEY', 'openai 档的密钥变量名默认 IMAGE_API_KEY', chain.entries[1].apiKeySecret);
 
   const local = chain.entries[0];

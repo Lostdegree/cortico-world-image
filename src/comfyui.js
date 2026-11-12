@@ -90,6 +90,55 @@ const SIZE_MIN = 64;
 const SIZE_MAX = 4096;
 const SIZE_STEP = 16;
 
+/** 校验单次覆盖，绝不把非法值悄悄修正为默认值。 */
+export function validateOverrides(args = {}, { strictSize = true } = {}) {
+  const out = {};
+  for (const key of ['steps', 'cfg', 'seed', 'negative', 'denoise', 'size']) {
+    if (args[key] === undefined) continue;
+    const value = args[key];
+    if (key === 'negative') {
+      if (typeof value !== 'string') throw new ComfyError('negative 必须是字符串', { status: 400 });
+    } else if (key === 'size') {
+      if (typeof value !== 'string' || (strictSize && !parseSize(value) && !['auto', 'default', ''].includes(value.trim().toLowerCase()))) throw new ComfyError('size 无效：请填写尺寸或比例', { status: 400 });
+      if (!value.trim()) continue;
+    } else {
+      const bounds = { steps: [1, 150], cfg: [0, 30], seed: [0, Number.MAX_SAFE_INTEGER], denoise: [0, 1] }[key];
+      if (typeof value !== 'number' || !Number.isFinite(value) || value < bounds[0] || value > bounds[1]
+        || (['steps', 'seed'].includes(key) && !Number.isSafeInteger(value))) {
+        throw new ComfyError(`${key} 必须是 ${bounds[0]}–${bounds[1]} 的${['steps', 'seed'].includes(key) ? '整数' : '数字'}`, { status: 400 });
+      }
+    }
+    out[key] = value;
+  }
+  return out;
+}
+
+function requireWorkflowOverrides(workflow, overrides = {}) {
+  // 只承认 SaveImage / PreviewImage 上游节点 inputs：元数据和孤立节点不会执行。
+  // 连通不证明输入真的控制预期功能（自定义节点或条件分支可能忽略它）。
+  const pending = Object.entries(workflow).filter(([, node]) => ['SaveImage', 'PreviewImage'].includes(node?.class_type)).map(([id]) => id);
+  const visited = new Set();
+  const used = new Set();
+  while (pending.length) {
+    const id = pending.pop();
+    if (visited.has(id) || !workflow[id]) continue;
+    visited.add(id);
+    const inputs = workflow[id].inputs ?? {};
+    scanPlaceholders(inputs, used);
+    const follow = (value) => {
+      if (Array.isArray(value)) {
+        if (value.length === 2 && typeof value[0] === 'string' && Number.isInteger(value[1]) && workflow[value[0]]) pending.push(value[0]);
+        else value.forEach(follow);
+      } else if (value && typeof value === 'object') Object.values(value).forEach(follow);
+    };
+    follow(inputs);
+  }
+  for (const key of Object.keys(overrides)) {
+    const ok = key === 'size' ? used.has('size') || (used.has('width') && used.has('height')) : used.has(key);
+    if (!ok) throw new ComfyError(`自定义工作流缺少 ${key} 对应占位符，不能应用本次参数${key === 'size' ? '（需 {{size}} 或同时有 {{width}} 和 {{height}}）' : `（需 {{${key}}}）`}`, { status: 400 });
+  }
+}
+
 /** 把任意数字掰成 16 的倍数（DiT 的 patch 是 2、latent 是 8，16 两者都够用）。 */
 function snapDim(value, step = SIZE_STEP) {
   const n = Math.round(Number(value));
@@ -305,7 +354,7 @@ export function txt2ImgWorkflow(opts = {}) {
         cfg: Math.max(0, Math.min(30, finite(Number(opts.cfg), 7))),
         sampler_name: String(opts.sampler ?? 'euler'),
         scheduler: String(opts.scheduler ?? 'normal'),
-        denoise: 1,
+        denoise: opts.denoise ?? 1,
         model: chain.model,
         positive: ['6', 0],
         negative: ['7', 0],
@@ -347,7 +396,7 @@ export function img2ImgWorkflow(opts = {}) {
         cfg: Math.max(0, Math.min(30, finite(Number(opts.cfg), 7))),
         sampler_name: String(opts.sampler ?? 'euler'),
         scheduler: String(opts.scheduler ?? 'normal'),
-        denoise: Math.max(0.05, Math.min(1, finite(Number(opts.denoise), 0.6))),
+        denoise: Math.max(0, Math.min(1, finite(Number(opts.denoise), 0.6))),
         model: chain.model,
         positive: ['6', 0],
         negative: ['7', 0],
@@ -430,7 +479,7 @@ function unetGraph(opts, { width, height, image }) {
       cfg: Math.max(0, Math.min(30, finite(Number(opts.cfg), 4))),
       sampler_name: String(opts.sampler ?? 'euler'),
       scheduler: String(opts.scheduler ?? 'simple'),
-      denoise: image ? Math.max(0.05, Math.min(1, finite(Number(opts.denoise), 0.6))) : 1,
+      denoise: image ? Math.max(0, Math.min(1, finite(Number(opts.denoise), 0.6))) : (opts.denoise ?? 1),
       model,
       positive: ['5', 0],
       negative: ['6', 0],
@@ -862,6 +911,7 @@ export async function listModels(baseUrl, { timeoutMs = 15000 } = {}) {
  * @returns {Promise<{bytes: Buffer, mime: string, revisedPrompt: null, promptId: string, image: object}>}
  */
 export async function comfyDraw(opts = {}) {
+  if (opts.workflow) requireWorkflowOverrides(opts.workflow, opts.overrides);
   const timeoutMs = Number(opts.timeoutMs) > 0 ? Number(opts.timeoutMs) : 300000;
   const { width, height } = sizeToWH(opts.size);
   const workflow = opts.workflow
@@ -880,6 +930,7 @@ export async function comfyDraw(opts = {}) {
  * @returns {Promise<{bytes: Buffer, mime: string, revisedPrompt: null, promptId: string, image: object}>}
  */
 export async function comfyEdit(opts = {}) {
+  if (opts.workflow) requireWorkflowOverrides(opts.workflow, opts.overrides);
   const timeoutMs = Number(opts.timeoutMs) > 0 ? Number(opts.timeoutMs) : 300000;
   // 参考图可以多张：内置工作流只有一张的位子，多张必须靠自定义模板里的 {{image1}}/{{image2}}…
   const refs = Array.isArray(opts.images) && opts.images.length

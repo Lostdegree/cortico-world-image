@@ -17,12 +17,13 @@
 
 ## 它做了什么
 
-装好并启用之后，桌宠会多出四个工具：
+装好并启用之后，桌宠会多出五个工具：
 
 | 工具 | 标签 | 作用 |
 | --- | --- | --- |
 | `image_draw` | `act` | 按文字描述画一张新图，落盘、记进索引（可带 `model` 点名用哪一档） |
 | `image_edit` | `act` | 拿已有的图按指令改（`image` 一张，或 `images` 最多四张参考图；同样能带 `model`）。多张参考图在支持多图编辑的端点上直接生效，只支持单图的地方会在回执里说「只有第一张参与了」 |
+| `image_models` | `read` | 查看模型档名称和可用情况，用于点名选择；不返回地址或密钥 |
 | `image_gallery` | `read` | 列出画过的图，带编号与绝对路径 |
 | `image_show` | `speak` | 把一张旧图重新放回对话与作品页 |
 
@@ -205,11 +206,13 @@ pnpm add "D:\path\to\cortico-world-image" --ignore-workspace
 
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
-| `enabled` | `false` | 是否把四个工具挂给桌宠 |
+| `enabled` | `false` | 是否把图片工具挂给桌宠 |
 | `baseUrl` | `https://api.openai.com/v1` | OpenAI 兼容的图片接口根地址（没配 `models` 时用它） |
 | `apiKeySecret` | `IMAGE_API_KEY` | 密钥的**变量名**：先看部署 `.env`，再退到同级的端点 `.env` |
 | `model` | `gpt-image-1` | 模型名（没配 `models` 时用它） |
 | `models` | 空 | 模型链：一串后端按优先级顺序试，见下面「模型链」（0.4.0 起） |
+| `namedModelFallback` | `false` | 点名模型失败时是否尝试其他模型档；默认严格只用指定档 |
+| `allowCrossEndpointFallback` | `false` | 点名兜底是否允许跨本地或不同远端地址；启用前请考虑提示词、参考图外传及费用 |
 | `size` | `1024x1024` | 尺寸：`1024x1536`、比例 `16:9`/`4:3`、或 `square`/`portrait`/`landscape`；`auto` 或留空＝不指定（云端不发这个参数，本地按图生图规则处理） |
 | `quality` | `auto` | `low`/`medium`/`high` 或 `standard`/`hd`；`auto` 不发 |
 | `format` | `png` | 接口没给格式时按这个存盘（`png`/`jpeg`/`webp`） |
@@ -257,8 +260,9 @@ pnpm add "D:\path\to\cortico-world-image" --ignore-workspace
 | `edit` | `false` = 这一档只用来画、不接改图（改图会跳到下一档） |
 | `enabled` | `false` = 跳过这一档 |
 
-工具参数 `model` 可以点名某一档（`name`、`ckpt` 或 `model` 三者之一）：点了名就**只用那一档**，
-失败了直接报错、不偷偷换——想让它自己挑就别传 `model`。
+工具的 `model` 可以按档名、checkpoint、UNet 或云模型名点名；`image_models` 可列出档名和可用状态。默认点名严格执行，失败不换档。开启 `namedModelFallback` 后，先试指定档，再按原链顺序试其他档；默认仅在本机回环地址之间或同一远端 origin 内兜底，启用 `allowCrossEndpointFallback` 才允许其他地址。未点名时保持原有链行为，因此链中云端档仍可能收到提示词或参考图并产生费用。
+
+`image_draw` 和 `image_edit` 可单次指定 `steps`（1–150）、`cfg`（0–30）、`seed`（非负安全整数）及 `negative`；改图还支持 `denoise`（0–1）。`size` 保持原有尺寸、比例或别名用法。不填时采用模型档配置；这些参数不会改写配置。ComfyUI 自定义工作流必须包含对应占位符才能使用单次覆盖；云端不支持这些本地采样参数时会明确失败或尝试其他支持的档，而不会假装生效。
 
 状态页的「模型链」卡片默认就是友好编辑：一档一张小卡片，填「名称 / 类型 / 地址 / 模型或 ckpt」，
 用「上移 / 下移」调优先级、「删除」去掉一档，「＋ 本地 ComfyUI」「＋ 云端接口」加档。
@@ -295,6 +299,7 @@ pnpm add "D:\path\to\cortico-world-image" --ignore-workspace
 `note`（一小行说明，写工作流时不用管）、`hasImage`（**真布尔**：这次带了参考图就是 `true`）、
 `mode`（`txt2img` / `img2img`）；写成 `{{prompt}}` 这样，认不出的原样留着。
 占位符两边有别的字符（比如 `"a photo, {{prompt}}"`）时按字符串拼进去；整个值就是一个占位符时保留原类型。
+单次覆盖校验只检查 `SaveImage` 或 `PreviewImage` 及其上游可达节点的 `inputs`，不计 `_meta` 或孤立节点；自定义输出节点不在此识别范围，使用单次覆盖时须连接标准输出节点。`size` 要有 `{{size}}` 或同时有 `{{width}}` 与 `{{height}}`。可达只表示变量被替换，不能证明自定义节点实际使用它、使用方式正确或条件分支被执行；请自行验证工作流。
 
 `hasImage` 之所以是布尔而不是 `"true"` 字符串，是为了直接接到 `ComfySwitchNode` 的 `switch` 口上：
 它的 `on_true` / `on_false` 是惰性输入，没被选中的那条分支不会执行，于是一份工作流就能兼出图与改图

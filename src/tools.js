@@ -10,6 +10,13 @@
 
 export const TOOL_SPECS = [
   {
+    name: 'image_models',
+    description: 'List configured image model entries and their configuration readiness for drawing and editing. This does not probe services or guarantee availability. Use an entry name as the model argument.',
+    tags: ['read'],
+    parameters: { type: 'object', properties: {}, required: [] },
+    summary: { zh: '查看已配置的模型档及画图、改图的配置可用性。', en: 'List configured model entries and their configuration readiness.' },
+  },
+  {
     name: 'image_draw',
     description: 'Draw a picture from a text description through the configured model chain (a local ComfyUI, an OpenAI-compatible cloud endpoint, or both in priority order). '
       + 'The picture is saved to disk, attached to this conversation so you can see it, and shown in the Image Studio console page. '
@@ -24,7 +31,7 @@ export const TOOL_SPECS = [
         },
         model: {
           type: 'string',
-          description: 'Optional chain entry name (for example "local" or "cloud"). Leave empty to try the chain in priority order.',
+          description: 'Optional chain entry name from image_models. Leave empty to try the chain in priority order. A named entry is strict by default; fallback depends on settings.',
         },
         note: {
           type: 'string',
@@ -35,6 +42,10 @@ export const TOOL_SPECS = [
           description:
             'Override the configured size: "1024x1536", a ratio like "16:9" or "4:3", or "square" / "portrait" / "landscape".',
         },
+        steps: { type: 'integer', description: 'Optional sampling steps for ComfyUI.' },
+        cfg: { type: 'number', description: 'Optional guidance scale for ComfyUI.' },
+        seed: { type: 'integer', description: 'Optional random seed for ComfyUI.' },
+        negative: { type: 'string', description: 'Optional negative prompt for ComfyUI.' },
         quality: {
           type: 'string',
           description: 'Override the configured quality, e.g. low / medium / high. Ignored by ComfyUI.',
@@ -67,7 +78,7 @@ export const TOOL_SPECS = [
             + 'Use it when the instruction refers to more than one picture ("把这两张拼起来", "照这个风格改那张"). '
             + 'If the chosen backend cannot take several references, the tool says so instead of quietly dropping them.',
         },
-        model: { type: 'string', description: 'Optional chain entry name. Leave empty to try the chain in priority order.' },
+        model: { type: 'string', description: 'Optional chain entry name from image_models. Leave empty for priority order. A named entry is strict by default; fallback depends on settings.' },
         note: { type: 'string', description: 'Short label for the result in the studio list.' },
         size: {
           type: 'string',
@@ -75,6 +86,11 @@ export const TOOL_SPECS = [
             'Override the output size: "1024x1024", a ratio like "16:9", or "square" / "portrait" / "landscape". ' +
             'Leave it empty to keep the source picture ratio (local ComfyUI) — that is the usual choice for edits.',
         },
+        denoise: { type: 'number', description: 'Optional img2img denoise strength for ComfyUI.' },
+        steps: { type: 'integer', description: 'Optional sampling steps for ComfyUI.' },
+        cfg: { type: 'number', description: 'Optional guidance scale for ComfyUI.' },
+        seed: { type: 'integer', description: 'Optional random seed for ComfyUI.' },
+        negative: { type: 'string', description: 'Optional negative prompt for ComfyUI.' },
         quality: { type: 'string', description: 'Override the configured quality. Ignored by ComfyUI.' },
       },
       required: ['prompt'],

@@ -108,12 +108,10 @@ export function parseChainEntries(raw, legacy = {}) {
       return;
     }
     const entry = normalize(item, index, defaults, warnings, false);
-    if (!entry.baseUrl) {
-      warnings.push(`「${entry.name}」没有 baseUrl，已跳过`);
-      return;
-    }
     if (seen.has(entry.name)) {
-      const renamed = `${entry.name}#${index + 1}`;
+      let suffix = index + 1;
+      let renamed = `${entry.name}#${suffix}`;
+      while (seen.has(renamed)) renamed = `${entry.name}#${++suffix}`;
       warnings.push(`「${entry.name}」重名了，这一档改叫「${renamed}」`);
       entry.name = renamed;
     }
@@ -141,7 +139,7 @@ function normalize(item, index, defaults, warnings, single) {
   );
   return {
     name,
-    preset: known ? preset : 'openai',
+    preset,
     baseUrl: asText(src.baseUrl, defaults.baseUrl),
     model: asText(src.model, preset === 'comfyui' ? '' : defaults.model),
     apiKeySecret: asText(src.apiKeySecret, defaults.apiKeySecret),
@@ -179,8 +177,9 @@ export function entryLabel(entry) {
 export function entryState(entry, { apiKey = '' } = {}) {
   if (!entry) return { ok: false, reason: '没有这一档' };
   if (!entry.enabled) return { ok: false, reason: '已停用' };
+  if (!PRESETS.includes(entry.preset)) return { ok: false, reason: '不支持的后端类型' };
   if (!entry.baseUrl) return { ok: false, reason: '没配地址' };
-  if (entry.preset === 'openai' && !apiKey) return { ok: false, reason: `没有密钥（${entry.apiKeySecret || 'IMAGE_API_KEY'}）` };
+  if (entry.preset === 'openai' && !apiKey) return { ok: false, reason: '没有密钥' };
   if (entry.preset === 'comfyui') {
     // 自定义工作流：节点和文件名都写在模板里，插件不校验。
     if (entry.workflow) return { ok: true, reason: '' };
@@ -201,10 +200,31 @@ export function entryState(entry, { apiKey = '' } = {}) {
  *
  * `only` 指定某一档名字时只试那一档（模型在工具参数里点名了，就不该偷偷换别人）。
  */
-export async function runChain(entries, runner, { only = '' } = {}) {
+export function matchesEntry(entry, wanted) {
+  return [entry.name, entry.ckpt, entry.unet, entry.model].some((value) => value && value === wanted);
+}
+
+// Only loopback hosts are confidently local; all others are distinct endpoints.
+// Unknown/private network addresses must not implicitly authorize a cloud transfer.
+function endpointScope(entry) {
+  try {
+    const url = new URL(entry.baseUrl);
+    const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+    if (host === 'localhost' || host === '::1' || /^127(?:\.\d{1,3}){3}$/.test(host)) return 'local';
+    return `endpoint:${url.origin.toLowerCase()}`;
+  } catch { return ''; }
+}
+
+export async function runChain(entries, runner, { only = '', fallback = false, allowCrossEndpoint = false } = {}) {
   const wanted = asText(only);
+  const exact = wanted ? entries.filter((entry) => entry.name === wanted) : [];
+  const aliases = wanted && !exact.length ? entries.filter((entry) => matchesEntry(entry, wanted)) : [];
+  const candidates = exact.length ? exact : aliases;
+  if (candidates.length > 1) throw new ChainError(`模型「${wanted}」匹配了多档，请使用模型档名称指定`, []);
+  const selected = candidates[0] ?? null;
+  const scope = selected ? endpointScope(selected) : '';
   const queue = wanted
-    ? entries.filter((entry) => entry.name === wanted || entry.ckpt === wanted || entry.unet === wanted || entry.model === wanted)
+    ? selected ? [selected, ...(fallback ? entries.filter((entry) => entry !== selected && (allowCrossEndpoint || (scope && endpointScope(entry) === scope))) : [])] : []
     : entries;
   if (!queue.length) {
     throw new ChainError(wanted ? `没有叫「${wanted}」的模型档` : '模型链是空的：去「图片工坊 → 状态 → 模型链」里配一档', []);
@@ -216,7 +236,7 @@ export async function runChain(entries, runner, { only = '' } = {}) {
       return { ...res, entry, attempts };
     } catch (err) {
       attempts.push({ name: entryLabel(entry), preset: entry.preset, status: Number(err?.status) || 0, message: String(err?.message ?? err) });
-      if (wanted || isFatal(err)) break;
+      if ((wanted && !fallback) || isFatal(err)) break;
     }
   }
   throw new ChainError(describeAttempts(attempts), attempts);
