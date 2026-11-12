@@ -173,7 +173,7 @@ pnpm add "D:\path\to\cortico-world-image" --ignore-workspace
 并自己在 `extensions/package.json` 里加 `"cortico-world-image": "link:D:\\path\\to\\cortico-world-image"`。
 
 **装完必须重启 Coopanion**：扩展是 ESM 模块，进程内不会重新加载。重启后在
-`config.json` 的 `worlds.image.enabled` 上打开（控制台里也有这个开关），四个工具才会挂给桌宠。
+`config.json` 的 `worlds.image.enabled` 上打开（控制台里也有这个开关），五个工具才会挂给桌宠。
 从 0.7.0 起，扩展启动时**只挂工具、不动任何别人的文件**（不再检查/重打 QQ 补丁，也不再请求重启）。
 
 ### 一份能用的 `worlds.image` 长什么样

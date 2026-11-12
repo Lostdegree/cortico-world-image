@@ -53,7 +53,7 @@ const ZH = {
   config: {
     title: '图片工坊',
     enabled: '启用图片工坊',
-    enabledDesc: '开启后桌宠才拿到 image_draw / image_edit / image_gallery / image_show 四个工具。',
+    enabledDesc: '开启后桌宠才拿到 image_models / image_draw / image_edit / image_gallery / image_show 五个工具。',
     baseUrl: '接口地址',
     baseUrlDesc: 'OpenAI 兼容的图片接口根地址，例如 https://api.openai.com/v1、https://api.siliconflow.cn/v1、https://open.bigmodel.cn/api/paas/v4。配了「模型链」时，这栏只当链里没写 baseUrl 的档的默认值。',
     models: '模型链',
@@ -112,7 +112,7 @@ const EN = {
   config: {
     title: 'Image Studio',
     enabled: 'Enable Image Studio',
-    enabledDesc: 'Turns on the image_draw / image_edit / image_gallery / image_show tools for the bot.',
+    enabledDesc: 'Turns on the image_models / image_draw / image_edit / image_gallery / image_show tools for the bot.',
     baseUrl: 'Endpoint',
     baseUrlDesc: 'Root URL of an OpenAI-compatible image API, e.g. https://api.openai.com/v1 or https://api.siliconflow.cn/v1. When a model chain is set, this is only the default for entries without their own baseUrl.',
     models: 'Model chain',
