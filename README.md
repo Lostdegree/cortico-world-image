@@ -215,7 +215,8 @@ pnpm add "D:\path\to\cortico-world-image" --ignore-workspace
 | `allowCrossEndpointFallback` | `false` | 点名兜底是否允许跨本地或不同远端地址；启用前请考虑提示词、参考图外传及费用 |
 | `size` | `1024x1024` | 尺寸：`1024x1536`、比例 `16:9`/`4:3`、或 `square`/`portrait`/`landscape`；`auto` 或留空＝不指定（云端不发这个参数，本地按图生图规则处理） |
 | `quality` | `auto` | `low`/`medium`/`high` 或 `standard`/`hd`；`auto` 不发 |
-| `format` | `png` | 接口没给格式时按这个存盘（`png`/`jpeg`/`webp`） |
+| `format` | `png` | 接口没给格式时按这个存盘（`png`/`jpeg`/`webp`）。**只影响存盘扩展名，不影响请求**；要出动图用下面的 `extraBody` |
+| `extraBody` | 空 | 额外请求参数（JSON 对象或 JSON 字符串）：原样并进请求体，`{"output_format":"gif"}` 这类私有字段就靠它（0.10.0 起）。插件自己发的同名字段会被它盖掉（含 `size`） |
 | `timeoutMs` | `180000` | 单次画图等待上限 |
 | `saveDir` | 空 | 留空 = 本插件数据目录下的 `images/` |
 | `keep` | `200` | 超出后自动删最旧的，`0` = 不清理 |
@@ -251,6 +252,7 @@ pnpm add "D:\path\to\cortico-world-image" --ignore-workspace
 | `name` | 这一档的名字；面板与报错里用它，工具参数 `model` 也按它点名 |
 | `preset` | `openai` / `comfyui` |
 | `baseUrl` / `model` / `apiKeySecret` / `size` / `quality` / `format` / `timeoutMs` | 同上面那张表 |
+| `extraBody` | 这一档自己的额外请求参数（JSON 对象）；写了就盖过全局 `extraBody`，面板上云端档的「参数」按钮就是它。动图别同时带 `size`：会被接口插值放大、结构容易崩（0.10.0 起） |
 | `ckpt` | ComfyUI 的 checkpoint 文件名（`comfyui` 必填，除非写了 `unet`） |
 | `unet` / `textEncoder` / `vaeName` | 裸 UNet 三件套：`ComfyUI/models/diffusion_models`、`text_encoders`、`vae` 里的文件名。**填了 `unet` 就顶掉 `ckpt`**，只出裸 UNet 那份工作流 |
 | `textEncoderType` | `unet` 的文本编码器类型，默认 `stable_diffusion`；Qwen 系编码器填 `qwen_image`（还认 `sd3` / `flux` / `cosmos` / `lumina2`） |
@@ -282,6 +284,22 @@ pnpm add "D:\path\to\cortico-world-image" --ignore-workspace
 「测试模型链」会挨档探活：ComfyUI 看 `/system_stats`，再用 `/object_info` 一次性核对 `ckpt`（或
 `unet` / `textEncoder` / `vaeName`）在不在；OpenAI 兼容看 `/models`（端点没这条路由也算在线）。
 探活每档最多等 6 秒；链上有没保存的改动时会先拦住。
+
+#### 出动图（GIF）：`extraBody`（0.10.0 起）
+
+有些第三方中转把「要不要动图」做成请求体里的私有字段（常见是 `output_format`，也有认 `format` 的；
+OpenAI 官方只认 `png` / `jpeg` / `webp`）。不想写进全局，就在那一档上点「参数」（云端档才有这个按钮），填：
+
+```json
+{ "output_format": "gif" }
+```
+
+改完点「保存模型链」，行上会标「已配」。写坏了只在框里红字提示、不动配置，不会把上一份能用的冲掉。
+想所有云端档都带上，就填设置页的「额外请求参数（JSON）」，单档自己的 `extraBody` 优先。
+
+`format` 那栏别跟着改——它只管接口没给格式时按什么扩展名存盘。动图也**别带 `size`**：
+实测 `output_format=gif` 再加 `size=1024x1024` 会被接口插值放大（拿到 1024×934），结构直接崩；
+`size` 留 `auto` 拿到的才是原生动图帧。
 
 #### ComfyUI 这档会调哪些路
 

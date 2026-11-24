@@ -628,6 +628,66 @@ try {
     const drewOdd = await cloudWorld.tools().find((t) => t.name === 'image_draw').handler({ prompt: '猫', size: '怪尺寸' });
     check(drewOdd && !drewOdd.failed, '云端那档能出图', JSON.stringify(drewOdd).slice(0, 100));
 
+    // 7b. issue #5：档位上的 extraBody 原样并进出图请求体（以前 generationBody 根本不发格式字段）
+    const makeWorld = (cfg) => definition.create({
+      cfg,
+      dataDir,
+      botDir,
+      packageDir: pkgDir,
+      secret: (name) => (name === 'IMAGE_API_KEY' ? 'sk-x' : ''),
+      storeSecret: () => {},
+    });
+    const bodyWorld = makeWorld({
+      ...definition.defaults(),
+      enabled: true,
+      size: 'auto',
+      models: JSON.stringify([{
+        name: 'cloud',
+        preset: 'openai',
+        baseUrl: 'https://api.test/v1',
+        model: 'gpt-image-1',
+        apiKeySecret: 'IMAGE_API_KEY',
+        extraBody: { output_format: 'gif' },
+      }]),
+    });
+    calls = stubFetch([['/images/generations', () => jsonResponse({ data: [{ b64_json: tinyB64 }] })]]);
+    const drewGif = await bodyWorld.tools().find((t) => t.name === 'image_draw').handler({ prompt: '猫' });
+    const gifBody = JSON.parse(String(calls[0].init.body));
+    check(drewGif && !drewGif.failed, '带 extraBody 的档照样能出图', JSON.stringify(drewGif).slice(0, 100));
+    check(gifBody.output_format === 'gif', '档位上的 extraBody 并进云端出图请求体', JSON.stringify(gifBody));
+    check(!('size' in gifBody), 'size=auto 时请求体里没有 size（动图别被接口插值放大）', JSON.stringify(gifBody));
+
+    // 7c. 全局 worlds.image.extraBody 也生效（JSON 字符串写法），单档自己的优先
+    calls = stubFetch([['/images/generations', () => jsonResponse({ data: [{ b64_json: tinyB64 }] })]]);
+    const globalWorld = makeWorld({
+      ...definition.defaults(),
+      enabled: true,
+      size: 'auto',
+      extraBody: '{"output_format":"gif","background":"transparent"}',
+      models: JSON.stringify([{ name: 'cloud', preset: 'openai', baseUrl: 'https://api.test/v1', model: 'gpt-image-1', apiKeySecret: 'IMAGE_API_KEY' }]),
+    });
+    await globalWorld.tools().find((t) => t.name === 'image_draw').handler({ prompt: '猫' });
+    const globalBody = JSON.parse(String(calls[0].init.body));
+    check(globalBody.output_format === 'gif' && globalBody.background === 'transparent', '全局 extraBody 写 JSON 字符串也并进请求体', JSON.stringify(globalBody));
+
+    calls = stubFetch([['/images/generations', () => jsonResponse({ data: [{ b64_json: tinyB64 }] })]]);
+    const bothWorld = makeWorld({
+      ...definition.defaults(),
+      enabled: true,
+      size: 'auto',
+      extraBody: '{"output_format":"gif"}',
+      models: JSON.stringify([{
+        name: 'cloud',
+        preset: 'openai',
+        baseUrl: 'https://api.test/v1',
+        model: 'gpt-image-1',
+        apiKeySecret: 'IMAGE_API_KEY',
+        extraBody: { output_format: 'webp' },
+      }]),
+    });
+    await bothWorld.tools().find((t) => t.name === 'image_draw').handler({ prompt: '猫' });
+    check(JSON.parse(String(calls[0].init.body)).output_format === 'webp', '单档的 extraBody 盖过全局那份');
+
     // 8. 世界层：多张参考图（image_edit 的 images）——两张都交给云端，回执照实说用了两张。
     const refA = join(dataDir, 'ref-a.png');
     const refB = join(dataDir, 'ref-b.png');
@@ -637,7 +697,22 @@ try {
     const multiEdit = await cloudWorld.tools().find((t) => t.name === 'image_edit').handler({ prompt: '合在一起', images: [refA, refB] });
     check(multiEdit && !multiEdit.failed, '多张参考图能改图', JSON.stringify(multiEdit).slice(0, 120));
     check(String(multiEdit.text).includes('用了 2 张参考图'), '回执点名用了几张参考图', String(multiEdit.text).split('\n')[0]);
+
     check(calls[0]?.init?.body instanceof FormData && calls[0].init.body.getAll('image[]').length === 2, '两张参考图都进了 multipart（image[]）');
+
+    // 8b. issue #5：改图两条路（multipart 与退回 /images/generations）都要带上 extraBody
+    calls = stubFetch([['/images/edits', () => jsonResponse({ data: [{ b64_json: tinyB64 }] })]]);
+    const gifEdit = await bodyWorld.tools().find((t) => t.name === 'image_edit').handler({ prompt: '重画', image: refA });
+    const gifForm = calls[0].init.body;
+    check(gifEdit && !gifEdit.failed, '带 extraBody 的档照样能改图', JSON.stringify(gifEdit).slice(0, 100));
+    check(gifForm instanceof FormData && gifForm.get('output_format') === 'gif', '改图的 multipart 也带上 extraBody', String(gifForm?.get?.('output_format')));
+
+    calls = stubFetch([
+      ['/images/edits', () => jsonResponse({ error: { message: 'not found' } }, 404)],
+      ['/images/generations', () => jsonResponse({ data: [{ b64_json: tinyB64 }] })],
+    ]);
+    await bodyWorld.tools().find((t) => t.name === 'image_edit').handler({ prompt: '重画', image: refA });
+    check(JSON.parse(String(calls[1].init.body)).output_format === 'gif', '改图退回 /images/generations 也带上 extraBody');
 
     calls = stubFetch([['/images/edits', () => jsonResponse({ error: { message: 'only one image' } }, 400)]]);
     const multiRejected = await cloudWorld.tools().find((t) => t.name === 'image_edit').handler({ prompt: '合在一起', images: [refA, refB] });
@@ -1570,6 +1645,79 @@ try {
     '裸 UNet 三件套与编码器类型也存进那一档',
     JSON.stringify({ unet: advEntry?.unet, te: advEntry?.textEncoder, type: advEntry?.textEncoderType, vae: advEntry?.vaeName }),
   );
+
+  // 「参数」：云端档才有，写进去的是 extraBody 对象（issue #5：动图字段走这里，档位白名单不再丢它）
+  // 保存会 await load() 从真状态重读，而这份假状态里 models 一直是空的，所以每次现补一档云端。
+  const addCloudRow = async () => {
+    findByText(chainRoot, '＋ 云端接口')?.click();
+    await tick(30);
+    const row = chainRowsOf().find((it) => chainKindOfRow(it)?.value === 'openai');
+    const inputs = chainInputsOf(row);
+    inputs[1].value = 'https://api.openai.com/v1';
+    fire(inputs[1], 'input');
+    inputs[2].value = 'gpt-image-1';
+    fire(inputs[2], 'input');
+    return row;
+  };
+  const openBody = async (row) => {
+    findByText(row, '参数')?.click();
+    await tick(30);
+    const box = findAll(chainRoot, (el) => String(el.className).split(/\s+/).includes('iw-chainextra'))[0];
+    return { box, area: box ? findAll(box, (el) => el.tagName === 'TEXTAREA')[0] : null };
+  };
+  const savedModels = () => {
+    try {
+      return JSON.parse(chainEnv.state.configWrites.at(-1)?.values?.['worlds.image.models'] ?? '');
+    } catch {
+      return null;
+    }
+  };
+
+  const bodyRow = await addCloudRow();
+  check(!!bodyRow && !findByText(bodyRow, '高级参数'), '云端档没有「高级参数」，只有「参数」');
+  const bodyFirst = await openBody(bodyRow);
+  check(!!bodyFirst.box, '点「参数」展开额外请求参数面板');
+  check(!!bodyFirst.box && walk(bodyFirst.box).some((el) => String(el.textContent ?? '').includes('原样并进请求体')), '面板里说清字段是原样并进请求体的');
+  check(!!bodyFirst.area, '面板里是写 JSON 的框');
+  bodyFirst.area.value = '{"output_format":"gif"}';
+  fire(bodyFirst.area, 'input');
+  await tick(20);
+  findByText(chainRoot, '保存模型链')?.click();
+  await tick(40);
+  const bodySaved = savedModels();
+  const bodyEntry = Array.isArray(bodySaved) ? bodySaved.find((it) => it.preset === 'openai') : null;
+  check(bodyEntry?.extraBody?.output_format === 'gif', '额外参数存进 models JSON 的 extraBody（是对象，不是字符串）', JSON.stringify(bodyEntry));
+
+  // 读不出来的 JSON 只提示、不落盘：别把上一份能用的额外参数冲掉
+  const bodyRow2 = await addCloudRow();
+  const bodySecond = await openBody(bodyRow2);
+  bodySecond.area.value = '{"output_format":"gif"}';
+  fire(bodySecond.area, 'input');
+  await tick(20);
+  bodySecond.area.value = '{"output_format": ';
+  fire(bodySecond.area, 'input');
+  await tick(20);
+  const bodyText = bodySecond.box ? walk(bodySecond.box).map((el) => String(el.textContent ?? '')).join('\n') : '';
+  check(/JSON 对象/.test(bodyText), '写坏的 JSON 给红字提示', bodyText.split('\n').filter((it) => it.includes('JSON')).join(' | '));
+  findByText(chainRoot, '保存模型链')?.click();
+  await tick(40);
+  const keptModels = savedModels();
+  const keptEntry = Array.isArray(keptModels) ? keptModels.find((it) => it.preset === 'openai') : null;
+  check(keptEntry?.extraBody?.output_format === 'gif', '坏 JSON 不会把上一份额外参数冲掉', JSON.stringify(keptEntry));
+
+  // 「清空」真的把这一档的额外参数删掉
+  const bodyRow3 = await addCloudRow();
+  const bodyThird = await openBody(bodyRow3);
+  bodyThird.area.value = '{"output_format":"gif"}';
+  fire(bodyThird.area, 'input');
+  await tick(20);
+  findByText(bodyThird.box, '清空')?.click();
+  await tick(20);
+  check(bodyThird.area.value === '', '「清空」把框里的 JSON 也清掉', String(bodyThird.area.value));
+  findByText(chainRoot, '保存模型链')?.click();
+  await tick(40);
+  const clearedModels = savedModels();
+  check(!Array.isArray(clearedModels) || !clearedModels.some((it) => it.preset === 'openai' && it.extraBody), '「清空」把额外参数从那一档删掉', JSON.stringify(clearedModels));
 
   // 「工作流」：本地 ComfyUI 档才有，能粘 API 格式 JSON、校验、保存、清空
   // （保存会 await load() 从真状态重读一遍，所以这里先自己加一档本地档）

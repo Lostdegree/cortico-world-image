@@ -208,6 +208,25 @@ async function materialize(json, { timeoutMs, format }) {
   throw new ImageApiError('接口返回里既没有 base64 也没有图片地址');
 }
 
+/**
+ * 把一档的私有参数并进请求体（issue #5：动图模型要 `output_format` 这类字段）。
+ * 认对象；字符串之类的脏值当没写，免得整次出图死在配置上。
+ */
+function mergeExtraBody(body, extraBody) {
+  if (extraBody && typeof extraBody === 'object' && !Array.isArray(extraBody)) Object.assign(body, extraBody);
+  return body;
+}
+
+/** multipart 里只有字符串：对象压成 JSON，布尔按 `true`/`false` 发，空值跳过。 */
+function applyExtraForm(form, extraBody) {
+  if (!extraBody || typeof extraBody !== 'object' || Array.isArray(extraBody)) return form;
+  for (const [key, value] of Object.entries(extraBody)) {
+    if (value === null || value === undefined) continue;
+    form.set(key, typeof value === 'object' ? JSON.stringify(value) : String(value));
+  }
+  return form;
+}
+
 /** 画图请求体：`n` 固定 1；size 归一化成 `宽x高`（别名云端不认），认不出来就不发；quality 是 auto 也不发。 */
 function generationBody(opts) {
   const body = { model: opts.model, prompt: opts.prompt, n: 1 };
@@ -224,8 +243,7 @@ function generationBody(opts) {
  */
 export async function generateImage(opts = {}) {
   const timeoutMs = Number(opts.timeoutMs) > 0 ? Number(opts.timeoutMs) : DEFAULT_TIMEOUT;
-  const body = generationBody(opts);
-  if (opts.extraBody && typeof opts.extraBody === 'object') Object.assign(body, opts.extraBody);
+  const body = mergeExtraBody(generationBody(opts), opts.extraBody);
   const json = await postJson(joinUrl(opts.baseUrl, 'images/generations'), {
     apiKey: opts.apiKey,
     body,
@@ -247,7 +265,7 @@ function dataUri(bytes, mime) {
  */
 async function editViaGenerations(opts, timeoutMs) {
   const refs = refsOf(opts);
-  const body = generationBody(opts);
+  const body = mergeExtraBody(generationBody(opts), opts.extraBody);
   body.image = dataUri(refs[0].bytes, refs[0].mime);
   if (refs.length > 1) body.images = refs.map((ref) => dataUri(ref.bytes, ref.mime));
   const json = await postJson(joinUrl(opts.baseUrl, 'images/generations'), {
@@ -289,6 +307,7 @@ export async function editImage(opts = {}) {
   if (size) form.set('size', size);
   const quality = String(opts.quality ?? '').trim();
   if (quality && quality.toLowerCase() !== 'auto') form.set('quality', quality);
+  applyExtraForm(form, opts.extraBody);
   for (const [index, ref] of refs.entries()) {
     const blob = new Blob([ref.bytes], { type: ref.mime ?? 'image/png' });
     const name = ref.name ?? `image-${index + 1}.png`;

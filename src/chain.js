@@ -42,6 +42,31 @@ function asBool(value, fallback = true) {
 }
 
 /**
+ * 一档的私有请求参数（`extraBody`）：对象直收，JSON 字符串也认（面板里就是文本框）。
+ * 读不出来不拖垮整份配置——记一笔警告，这一档退回兜底值（通常是顶层配置那份）。
+ * @returns {object|null} 只认普通对象；空值给 `fallback`。
+ */
+function asBody(value, where, warnings, fallback = null) {
+  if (value === undefined || value === null) return fallback;
+  if (typeof value === 'string') {
+    const raw = value.trim();
+    if (!raw) return fallback;
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+      warnings.push(`${where}的 extraBody 要是一个 JSON 对象，例如 {"output_format":"gif"}，已忽略`);
+      return fallback;
+    } catch (err) {
+      warnings.push(`${where}的 extraBody 不是合法 JSON：${String(err?.message ?? err)}，已忽略`);
+      return fallback;
+    }
+  }
+  if (typeof value === 'object' && !Array.isArray(value)) return { ...value };
+  warnings.push(`${where}的 extraBody 只能是 JSON 对象，已忽略`);
+  return fallback;
+}
+
+/**
  * 解析 `worlds.image.models`。
  *
  * @param raw JSON 字符串，或已经解析好的数组；空 = 用旧单档。
@@ -58,6 +83,7 @@ export function parseChainEntries(raw, legacy = {}) {
     size: asText(legacy.size, ''),
     quality: asText(legacy.quality, 'auto'),
     format: asText(legacy.format, 'png'),
+    extraBody: asBody(legacy.extraBody, '默认配置', warnings),
     timeoutMs: Math.max(10000, Math.min(900000, asNumber(legacy.timeoutMs, 180000))),
     steps: 25,
     cfg: 7,
@@ -146,6 +172,9 @@ function normalize(item, index, defaults, warnings, single) {
     size: asText(src.size, defaults.size),
     quality: asText(src.quality, defaults.quality),
     format: asText(src.format, defaults.format),
+    extraBody: src.extraBody === undefined
+      ? defaults.extraBody
+      : asBody(src.extraBody, `第 ${index + 1} 档`, warnings, defaults.extraBody),
     timeoutMs: Math.max(5000, Math.min(1800000, asNumber(src.timeoutMs, defaults.timeoutMs))),
     ckpt: preset === 'comfyui' ? ckpt : '',
     unet: preset === 'comfyui' ? unet : '',

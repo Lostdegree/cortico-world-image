@@ -168,6 +168,7 @@ export class ImageWorld {
       size: this.#str('size'),
       quality: this.#str('quality'),
       format: this.#str('format'),
+      extraBody: this.#raw('extraBody'),
       timeoutMs: this.#num('timeoutMs', 10000, 900000),
     });
   }
@@ -510,6 +511,7 @@ export class ImageWorld {
       size: size || entry.size,
       quality: quality || entry.quality,
       format: entry.format,
+      extraBody: entry.extraBody,
       timeoutMs: entry.timeoutMs,
     });
   }
@@ -568,6 +570,7 @@ export class ImageWorld {
       size: size || entry.size,
       quality: quality || entry.quality,
       format: entry.format,
+      extraBody: entry.extraBody,
       timeoutMs: entry.timeoutMs,
     });
     return { ...res, notice: res.notice ?? '' };

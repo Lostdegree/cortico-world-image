@@ -28,6 +28,7 @@ const STYLE = `
 .iw-chaintools { grid-column: 1 / -1; display: flex; align-items: center; gap: 4px; flex-wrap: nowrap; justify-content: flex-end; }
 .iw-chaintools button { padding: 2px 6px; }
 .iw-chainadv { border: 1px dashed rgba(128,128,128,.45); border-radius: 8px; padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+.iw-chainextra { border: 1px dashed rgba(128,128,128,.45); border-radius: 8px; padding: 8px; display: flex; flex-direction: column; gap: 6px; }
 .iw-chainadvhead { display: flex; gap: 8px; align-items: center; justify-content: space-between; }
 .iw-lorarows { display: flex; flex-direction: column; gap: 4px; }
 .iw-lorarow { display: grid; grid-template-columns: 1fr 90px 90px 64px; gap: 6px; align-items: center; }
@@ -127,6 +128,15 @@ const ZH = {
   chainWfEmpty: '不用自定义工作流就留空——插件会用内置的 txt2img / img2img 流程。',
   chainUnetInAdv: '已用高级参数里的裸 UNet',
   chainNeedUnetParts: '裸 UNet 还差文本编码器 / VAE',
+  chainExtra: '参数',
+  chainExtraTitle: '额外请求参数',
+  chainExtraClose: '收起',
+  chainExtraHint: '这一档每次出图 / 改图都会把这些字段原样并进请求体。动图模型填 {"output_format":"gif"}；动图再带 size 会被插值放大，建议同时把尺寸清空。接口不认的字段会报错，删掉即可。留空则用「额外请求参数（JSON）」那条全局配置。',
+  chainExtraPlaceholder: '{"output_format":"gif"}',
+  chainExtraBad: '要是一个 JSON 对象，例如 {"output_format":"gif"}',
+  chainExtraOk: 'JSON 能读；点「保存模型链」才写进配置',
+  chainExtraClear: '清空',
+  chainExtraSet: '已配',
   chainJson: '高级：JSON',
   chainJsonHint: '这里是原始的 worlds.image.models：workflow、loras、steps、denoise 这些高级字段直接在这改。链空着打开时会填一份现成范例（本地 ComfyUI 带 LoRA + 云端各一档），把 ckpt / loras 换成你自己 models 里的文件名，先「应用 JSON」再「保存模型链」。',
   chainJsonApply: '应用 JSON',
@@ -261,6 +271,15 @@ const EN = {
   chainWfEmpty: 'Leave empty to use the built-in txt2img / img2img graphs.',
   chainUnetInAdv: 'using the bare UNet from Advanced',
   chainNeedUnetParts: 'bare UNet still needs a text encoder / VAE',
+  chainExtra: 'Params',
+  chainExtraTitle: 'Extra request body',
+  chainExtraClose: 'Hide',
+  chainExtraHint: 'Merged verbatim into this entry\'s POST body on every draw / edit. Animated models: {"output_format":"gif"}; a GIF with size gets upscaled, so clear the size too. Unknown fields make the endpoint error — delete them. Empty falls back to the global "Extra request body (JSON)" setting.',
+  chainExtraPlaceholder: '{"output_format":"gif"}',
+  chainExtraBad: 'Must be one JSON object, e.g. {"output_format":"gif"}',
+  chainExtraOk: 'JSON parses; press "Save chain" to write it',
+  chainExtraClear: 'Clear',
+  chainExtraSet: 'set',
   chainJson: 'Advanced: JSON',
   chainJsonHint: 'Raw worlds.image.models — edit workflow, loras, steps, denoise and other advanced fields here. With no chain yet it opens pre-filled with a working example (a local ComfyUI tier with LoRA plus a cloud tier); swap ckpt / loras for your own file names, then Apply JSON and Save chain.',
   chainJsonApply: 'Apply JSON',
@@ -319,7 +338,15 @@ function parseChainJson(raw) {
   try {
     const parsed = JSON.parse(value);
     if (!Array.isArray(parsed)) return { entries: [], error: 'not an array / 不是数组' };
-    const entries = parsed.filter((it) => it && typeof it === 'object' && !Array.isArray(it)).map((it) => ({ ...it }));
+    const entries = parsed.filter((it) => it && typeof it === 'object' && !Array.isArray(it)).map((it) => {
+      const entry = { ...it };
+      // extraBody 允许手写成 JSON 字符串：读得懂就统一成对象，落盘时形状干净。
+      if (typeof entry.extraBody === 'string') {
+        const body = chainBodyValue(entry);
+        if (body) entry.extraBody = body;
+      }
+      return entry;
+    });
     return { entries, error: '' };
   } catch (err) {
     return { entries: [], error: message(err) };
@@ -334,6 +361,22 @@ function chainToJson(entries) {
     return out;
   });
   return list.length ? JSON.stringify(list, null, 2) : '[]';
+}
+
+/** 一档的额外请求参数：对象直收，手写进来的 JSON 字符串也认；读不出来返回 null。 */
+function chainBodyValue(entry) {
+  const value = entry?.extraBody;
+  if (!value) return null;
+  if (typeof value === 'object' && !Array.isArray(value)) return value;
+  if (typeof value !== 'string') return null;
+  const raw = value.trim();
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -845,6 +888,10 @@ function statusPanel(ctx) {
   let chainAdvEntry = null;
   /** 正在编辑自定义工作流的那一档（本地 ComfyUI 才有）。 */
   let chainWfEntry = null;
+  /** 正在编辑「额外请求参数」的那一档（云端档才有）。 */
+  let chainExtraEntry = null;
+  /** 额外参数还没通过校验的草稿：重画这一行时把打字的内容还回去，别把人写了一半的 JSON 冲掉。 */
+  const chainExtraDrafts = new Map();
   let chainJsonShown = false;
 
   const chainCard = ctx.ui.section(tx.chainTitle, tx.chainDesc);
@@ -914,6 +961,7 @@ function statusPanel(ctx) {
       entry.preset = kindSel.value === 'comfyui' ? 'comfyui' : 'openai';
       if (entry.preset !== 'comfyui' && chainAdvEntry === entry) chainAdvEntry = null;
       if (entry.preset !== 'comfyui' && chainWfEntry === entry) chainWfEntry = null;
+      if (entry.preset === 'comfyui' && chainExtraEntry === entry) chainExtraEntry = null;
       markChainDirty();
       renderChain();
     });
@@ -965,6 +1013,23 @@ function statusPanel(ctx) {
           onClick: () => {
             chainAdvEntry = chainAdvEntry === entry ? null : entry;
             if (chainAdvEntry) chainWfEntry = null;
+            renderChain();
+          },
+        }),
+      );
+    } else {
+      // 云端档：额外请求参数（动图模型的 output_format 这类私有字段）。
+      // 按钮文案保持干净的「参数」，有没有配用旁边的小字说，别让按钮名跟着状态变。
+      if (chainBodyValue(entry)) tools.append(ctx.ui.h('span', 'iw-sub', `${tx.chainExtraSet}`));
+      tools.append(
+        ctx.ui.button(tx.chainExtra, {
+          size: 'sm',
+          onClick: () => {
+            chainExtraEntry = chainExtraEntry === entry ? null : entry;
+            if (chainExtraEntry) {
+              chainAdvEntry = null;
+              chainWfEntry = null;
+            }
             renderChain();
           },
         }),
@@ -1217,6 +1282,81 @@ function statusPanel(ctx) {
     return box;
   };
 
+  /**
+   * 一档的「额外请求参数」：这些键每次出图 / 改图都会原样并进请求体（issue #5 的动图字段就走这里）。
+   * 只对云端档出现；写进去的是对象，跟 `extraBody` 在 models JSON 里的形状一致。
+   */
+  const chainExtraBlock = (entry) => {
+    const box = ctx.ui.h('div', 'iw-chainextra');
+    const head = ctx.ui.h('div', 'iw-chainadvhead');
+    head.append(
+      ctx.ui.h('span', null, `${tx.chainExtraTitle} · ${String(entry.name || entry.model || '')}`),
+      ctx.ui.button(tx.chainExtraClose, {
+        size: 'sm',
+        onClick: () => {
+          chainExtraEntry = null;
+          renderChain();
+        },
+      }),
+    );
+
+    const current = chainBodyValue(entry);
+    const area = ctx.ui.textarea({ rows: 4, cls: 'mono', placeholder: tx.chainExtraPlaceholder });
+    area.value = chainExtraDrafts.has(entry) ? chainExtraDrafts.get(entry) : (current ? JSON.stringify(current, null, 2) : '');
+    const note = ctx.ui.msgline('');
+    const say = (text, kind) => {
+      note.textContent = text;
+      note.style.color = kind === 'bad' ? '#d9534f' : kind === 'ok' ? '#3c9d5d' : '';
+    };
+
+    // 立刻校验、立刻写回这一档（跟上面几个输入框一样），写进配置仍要点「保存模型链」。
+    const sync = () => {
+      const raw = area.value.trim();
+      if (!raw) {
+        chainExtraDrafts.delete(entry);
+        delete entry.extraBody;
+        say('');
+        markChainDirty();
+        return false;
+      }
+      let parsed = null;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        parsed = null;
+      }
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        chainExtraDrafts.set(entry, area.value);
+        say(tx.chainExtraBad, 'bad');
+        return false;
+      }
+      chainExtraDrafts.delete(entry);
+      entry.extraBody = parsed;
+      say(tx.chainExtraOk, 'ok');
+      markChainDirty();
+      return true;
+    };
+
+    area.addEventListener('input', () => { sync(); });
+    const bar = ctx.ui.actions();
+    bar.append(
+      ctx.ui.button(tx.chainExtraClear, {
+        size: 'sm',
+        onClick: () => {
+          area.value = '';
+          chainExtraDrafts.delete(entry);
+          delete entry.extraBody;
+          say('');
+          markChainDirty();
+        },
+      }),
+    );
+
+    if (area.value.trim()) sync();
+    box.append(head, ctx.ui.h('div', 'iw-sub', tx.chainExtraHint), area, bar, note);
+    return box;
+  };
+
   const renderChain = () => {
     chainOrderLine.style.display = chainEdit.length ? '' : 'none';
     chainHead.style.display = chainEdit.length ? '' : 'none';
@@ -1230,6 +1370,7 @@ function statusPanel(ctx) {
       chainRows.appendChild(chainRowOf(entry, index));
       if (chainAdvEntry === entry) chainRows.appendChild(chainAdvBlock(entry));
       if (chainWfEntry === entry) chainRows.appendChild(chainWfBlock(entry));
+      if (chainExtraEntry === entry) chainRows.appendChild(chainExtraBlock(entry));
     });
     // 链空着、且 JSON 框开着时，别用 `[]` 把里面的范例/草稿冲掉。
     if (!chainJsonShown || chainEdit.length || chainBroken) chainJson.value = chainToJson(chainEdit);
@@ -1297,6 +1438,8 @@ function statusPanel(ctx) {
     const [gone] = chainEdit.splice(index, 1);
     if (gone === chainAdvEntry) chainAdvEntry = null;
     if (gone === chainWfEntry) chainWfEntry = null;
+    if (gone === chainExtraEntry) chainExtraEntry = null;
+    chainExtraDrafts.delete(gone);
     chainDirty = true;
     chainProbe = null;
     renderChain();
